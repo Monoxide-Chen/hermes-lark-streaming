@@ -73,6 +73,51 @@ class Config:
         return int(self._streaming_sec().get("card_ttl_sec", 600))
 
     @property
+    def update_notice_enabled(self) -> bool:
+        """Whether owner-only model update notices are enabled."""
+        sec = self._update_notice_sec()
+        return bool(sec.get("enabled", bool(self.update_notice_owner_user_id)))
+
+    @property
+    def update_notice_owner_user_id(self) -> str:
+        """Feishu/Lark owner open_id that may receive update notices."""
+        env_value = os.environ.get("HERMES_LARK_OWNER_USER_ID", "").strip()
+        if env_value:
+            return env_value
+        return str(self._update_notice_sec().get("owner_user_id", "") or "").strip()
+
+    @property
+    def update_notice_repo(self) -> str:
+        """GitHub owner/repository used for release discovery."""
+        return str(
+            self._update_notice_sec().get(
+                "repo",
+                "Monoxide-Chen/hermes-lark-streaming",
+            )
+            or ""
+        ).strip()
+
+    @property
+    def update_notice_check_ttl_sec(self) -> int:
+        """Minimum interval between GitHub Release checks."""
+        value = int(self._update_notice_sec().get("check_ttl_sec", 86400))
+        return max(value, 60)
+
+    @property
+    def update_notice_timeout_sec(self) -> float:
+        """Network timeout for the background GitHub Release request."""
+        value = float(self._update_notice_sec().get("timeout_sec", 5.0))
+        return min(max(value, 0.5), 30.0)
+
+    @property
+    def update_notice_state_path(self) -> str:
+        """Optional state-file override; relative paths resolve under HERMES_HOME."""
+        env_value = os.environ.get("HERMES_LARK_UPDATE_STATE_PATH", "").strip()
+        if env_value:
+            return env_value
+        return str(self._update_notice_sec().get("state_path", "") or "").strip()
+
+    @property
     def header_enabled(self) -> bool:
         """流式卡片和完成态卡片是否显示 header."""
         sec = self._streaming_sec()
@@ -147,6 +192,12 @@ class Config:
     def _streaming_sec(self) -> dict[str, Any]:
         raw = self._load()
         sec = raw.get("streaming") or {}
+        if isinstance(sec, dict):
+            return sec
+        return {}
+
+    def _update_notice_sec(self) -> dict[str, Any]:
+        sec = self._streaming_sec().get("update_notice") or {}
         if isinstance(sec, dict):
             return sec
         return {}
