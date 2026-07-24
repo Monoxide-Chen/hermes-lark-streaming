@@ -20,7 +20,12 @@ from hermes_lark_streaming.patcher import (
     MARKERS,
     MK_CRON_DELIVER,
     MK_CRON_DELIVER_END,
+    MK_FEISHU_NOTICE,
+    MK_SLASH_DELIVER,
+    MK_SLASH_DIRECT,
+    BasePatcher,
     CronPatcher,
+    FeishuAdapterPatcher,
     Patcher,
     PatcherError,
     _cron_deliver_hook,
@@ -92,6 +97,71 @@ def _patcher(path: Path) -> Patcher:
 
 def _cron_patcher(path: Path) -> CronPatcher:
     return CronPatcher(cron_path=path)
+
+
+@pytest.fixture()
+def base_copy(tmp_path: Path) -> Path:
+    path = tmp_path / "base.py"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            class Base:
+                async def _dispatch_active_session_command(self, event, session_key, cmd):
+                    response = await self._message_handler(event)
+                    _text, _eph_ttl = self._unwrap_ephemeral(response)
+                    if _text:
+                        await self._send_with_retry(content=_text)
+
+                async def handle_message(self, event):
+                    cmd = event.get_command()
+                    if cmd:
+                        response = await self._message_handler(event)
+                        _text, _eph_ttl = self._unwrap_ephemeral(response)
+                        if _text:
+                            await self._send_with_retry(content=_text)
+
+                async def _process_message_background(self, event, session_key):
+                    response = await self._message_handler(event)
+                    is_ephemeral_response = False
+                    response, _ephemeral_ttl = self._unwrap_ephemeral(response)
+                    text_content = response
+                    images = []
+                    local_files = []
+                    media_files = []
+                    delivery_attempted = False
+                    delivery_succeeded = False
+                    # Auto-TTS: if voice message, generate audio FIRST
+                    if text_content:
+                        await self.send(text_content)
+            """
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture()
+def feishu_adapter_copy(tmp_path: Path) -> Path:
+    path = tmp_path / "adapter.py"
+    path.write_text(
+        textwrap.dedent(
+            '''\
+            class SendResult:
+                def __init__(self, success, message_id=None):
+                    self.success = success
+                    self.message_id = message_id
+
+            class FeishuAdapter:
+                async def send(self, chat_id, content, reply_to=None, metadata=None):
+                    """Send a Feishu message."""
+                    if not self._client:
+                        return SendResult(success=False)
+                    return SendResult(success=True)
+            '''
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def _build_cron_hook_runner():
@@ -472,6 +542,135 @@ class TestCronBackupRestore:
         cp = _cron_patcher(scheduler_copy)
         with pytest.raises(PatcherError, match="No backup found"):
             cp.restore()
+
+
+class TestBasePatcher:
+    def test_injects_normal_ephemeral_and_active_bypass_hooks(
+        self,
+        base_copy: Path,
+    ) -> None:
+        patcher = BasePatcher(base_path=base_copy)
+        patcher.apply()
+        content = base_copy.read_text(encoding="utf-8")
+
+        assert MK_SLASH_DELIVER in content
+        assert MK_SLASH_DIRECT in content
+        assert "# HERMES_LARK_SLASH_BYPASS_0_BEGIN" in content
+        assert "and not is_ephemeral_response" not in content
+        assert "_schedule_ephemeral_delete" in content
+        assert "_lark_command_msg_id" in content
+        ast.parse(content)
+
+    def test_remove_restores_original(self, base_copy: Path) -> None:
+        patcher = BasePatcher(base_path=base_copy)
+        original = base_copy.read_text(encoding="utf-8")
+
+        patcher.apply()
+        patcher.remove()
+
+        assert base_copy.read_text(encoding="utf-8") == original
+
+    def test_upgrades_legacy_normal_only_hook(self, base_copy: Path) -> None:
+        from hermes_lark_streaming.__main__ import _base_patcher_status
+
+        patcher = BasePatcher(base_path=base_copy)
+        original = base_copy.read_text(encoding="utf-8")
+        anchor = "        # Auto-TTS: if voice message, generate audio FIRST\n"
+        legacy = original.replace(
+            anchor,
+            (
+                "        # HERMES_LARK_SLASH_DELIVER_BEGIN\n"
+                "        legacy_hook = True\n"
+                "        # HERMES_LARK_SLASH_DELIVER_END\n"
+                + anchor
+            ),
+            1,
+        )
+        base_copy.write_text(legacy, encoding="utf-8")
+
+        assert patcher.is_patched()
+        assert not patcher.is_fully_patched()
+        assert _base_patcher_status(patcher) == "partial (rerun install)"
+
+        patcher.apply()
+        upgraded = base_copy.read_text(encoding="utf-8")
+
+        assert "legacy_hook" not in upgraded
+        assert MK_SLASH_DIRECT in upgraded
+        assert "# HERMES_LARK_SLASH_BYPASS_0_BEGIN" in upgraded
+        assert patcher.is_fully_patched()
+        assert _base_patcher_status(patcher) == "installed"
+
+
+class TestFeishuAdapterPatcher:
+    def test_injects_notice_fallback_hook(self, feishu_adapter_copy: Path) -> None:
+        patcher = FeishuAdapterPatcher(adapter_path=feishu_adapter_copy)
+        patcher.apply()
+        content = feishu_adapter_copy.read_text(encoding="utf-8")
+
+        assert MK_FEISHU_NOTICE in content
+        assert "on_feishu_notification_deliver" in content
+        assert "_lark_notice_msg_id" in content
+        ast.parse(content)
+
+    def test_remove_restores_original(self, feishu_adapter_copy: Path) -> None:
+        patcher = FeishuAdapterPatcher(adapter_path=feishu_adapter_copy)
+        original = feishu_adapter_copy.read_text(encoding="utf-8")
+
+        patcher.apply()
+        patcher.remove()
+
+        assert feishu_adapter_copy.read_text(encoding="utf-8") == original
+
+
+class TestStaticDeliveryHooks:
+    @pytest.mark.asyncio
+    async def test_slash_hook_returns_message_id(self) -> None:
+        from hermes_lark_streaming.patch import on_slash_command_deliver
+
+        with patch("hermes_lark_streaming.patch.get_controller") as mock_get:
+            ctrl = MagicMock()
+            ctrl.enabled = True
+            ctrl.on_static_deliver = AsyncMock(return_value="om_card")
+            mock_get.return_value = ctrl
+
+            result = await on_slash_command_deliver(
+                chat_id="oc_1",
+                command="new",
+                content="reset",
+                reply_to_message_id="om_source",
+            )
+
+        assert result == "om_card"
+        ctrl.on_static_deliver.assert_awaited_once_with(
+            chat_id="oc_1",
+            command="new",
+            content="reset",
+            reply_to_message_id="om_source",
+        )
+
+    @pytest.mark.asyncio
+    async def test_notice_hook_only_claims_known_lifecycle_notices(self) -> None:
+        from hermes_lark_streaming.patch import on_feishu_notification_deliver
+
+        with patch("hermes_lark_streaming.patch.get_controller") as mock_get:
+            ctrl = MagicMock()
+            ctrl.enabled = True
+            ctrl.on_static_deliver = AsyncMock(return_value="om_notice")
+            mock_get.return_value = ctrl
+
+            ordinary = await on_feishu_notification_deliver(
+                chat_id="oc_1",
+                content="ordinary agent response",
+            )
+            lifecycle = await on_feishu_notification_deliver(
+                chat_id="oc_1",
+                content="⚠️ Gateway shutting down — interrupted",
+            )
+
+        assert ordinary is None
+        assert lifecycle == "om_notice"
+        ctrl.on_static_deliver.assert_awaited_once()
 
 
 class TestOnCronDeliverHook:

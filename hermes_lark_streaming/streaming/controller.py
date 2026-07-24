@@ -7,7 +7,14 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
-from ..cardkit.builder import build_background_card, build_complete_card, build_cron_card, build_streaming_card_v2
+from ..cardkit.builder import (
+    build_background_card,
+    build_command_card,
+    build_complete_card,
+    build_cron_card,
+    build_notification_card,
+    build_streaming_card_v2,
+)
 from ..cardkit.markdown import (
     _downgrade_tables,
     optimize_markdown_style,
@@ -69,7 +76,7 @@ class StreamingController:
     _cfg: Config
     _ensure_init: Callable[..., Coroutine[Any, Any, None]]
     _cleanup: Callable[[str], None]
-    _flush_deferred_background_reviews: Callable[[CardSession], None]
+    _flush_deferred_background_reviews: Callable[[CardSession], Coroutine[Any, Any, None]]
 
     def _schedule_flush(self, session: CardSession) -> None:
         if session.state == SessionState.IDLE or session.state.is_terminal:
@@ -583,7 +590,7 @@ class StreamingController:
         try:
             return await self._do_complete_card_inner(session)
         finally:
-            self._flush_deferred_background_reviews(session)
+            await self._flush_deferred_background_reviews(session)
             self._cleanup(session.message_id)
 
     async def _do_complete_card_inner(self, session: CardSession) -> bool:
@@ -702,6 +709,28 @@ class StreamingController:
         assert self._client is not None
         card = build_background_card(preview, content)
         await self._client.send_card_to_chat(
+            chat_id,
+            card,
+            reply_to_message_id=reply_to_message_id,
+        )
+
+    async def _do_static_deliver(
+        self,
+        chat_id: str,
+        content: str,
+        *,
+        command: str | None = None,
+        reply_to_message_id: str | None = None,
+    ) -> str:
+        """Deliver already-complete command/notice content without fake streaming."""
+        await self._ensure_init()
+        assert self._client is not None
+        card = (
+            build_command_card(command, content)
+            if command is not None
+            else build_notification_card(content)
+        )
+        return await self._client.send_card_to_chat(
             chat_id,
             card,
             reply_to_message_id=reply_to_message_id,

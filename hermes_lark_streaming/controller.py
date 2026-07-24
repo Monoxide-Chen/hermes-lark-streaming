@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import threading
 import time
@@ -385,6 +386,35 @@ class StreamCardController(StreamingController):
             _logger.warning("background card delivery failed", exc_info=True)
             return False
 
+    async def on_static_deliver(
+        self,
+        *,
+        chat_id: str,
+        content: str,
+        command: str | None = None,
+        reply_to_message_id: str | None = None,
+    ) -> str | None:
+        """Deliver an immediate slash result or lifecycle notice as CardKit."""
+        if not self.enabled or not content or not chat_id:
+            return None
+        try:
+            message_id = await self._do_static_deliver(
+                chat_id,
+                content,
+                command=command,
+                reply_to_message_id=reply_to_message_id,
+            )
+            _logger.info(
+                "static card delivered: kind=%s chat=%s len=%d",
+                f"/{command}" if command else "notification",
+                chat_id[:12],
+                len(content),
+            )
+            return message_id
+        except Exception:
+            _logger.warning("static card delivery failed; yielding to Hermes text delivery", exc_info=True)
+            return None
+
     def defer_background_review(
         self,
         *,
@@ -404,7 +434,8 @@ class StreamCardController(StreamingController):
             session.deferred_background_reviews.append((text, sender))
         return True
 
-    def _flush_deferred_background_reviews(self, session: CardSession) -> None:
+    async def _flush_deferred_background_reviews(self, session: CardSession) -> None:
+        """Deliver deferred review notices as cards, falling back to Hermes."""
         lock = getattr(session, "deferred_background_review_lock", None)
         reviews = getattr(session, "deferred_background_reviews", None)
         if lock is None or reviews is None:
@@ -414,8 +445,17 @@ class StreamCardController(StreamingController):
             pending = list(reviews)
             reviews.clear()
         for text, sender in pending:
+            message_id = await self.on_static_deliver(
+                chat_id=session.chat_id,
+                content=text,
+                reply_to_message_id=session.anchor_id,
+            )
+            if message_id:
+                continue
             try:
-                sender(text)
+                result = sender(text)
+                if inspect.isawaitable(result):
+                    await result
             except Exception:
                 _logger.debug("background review sender failed", exc_info=True)
 
