@@ -34,6 +34,8 @@ _HOOK_NAMES = [
     "ABORT",
     "INTERRUPT",
     "BG_DELIVER",
+    "UPDATE_CONTEXT",
+    "UPDATE_WARM",
 ]
 MARKERS: list[tuple[str, str]] = [(f"# {PREFIX}_{n}_BEGIN", f"# {PREFIX}_{n}_END") for n in _HOOK_NAMES]
 
@@ -50,6 +52,8 @@ MK_BACKGROUND_REVIEW, MK_BACKGROUND_REVIEW_END = MARKERS[9]
 MK_ABORT, MK_ABORT_END = MARKERS[10]
 MK_INTERRUPT, MK_INTERRUPT_END = MARKERS[11]
 MK_BG_DELIVER, MK_BG_DELIVER_END = MARKERS[12]
+MK_UPDATE_CONTEXT, MK_UPDATE_CONTEXT_END = MARKERS[13]
+MK_UPDATE_WARM, MK_UPDATE_WARM_END = MARKERS[14]
 
 _BACKUP_SUFFIX = ".hermes_lark.bak"
 
@@ -197,6 +201,7 @@ _ANCHOR_CHECKS: list[tuple[str, tuple[str, ...], str]] = [
     ("images, text_content = adapter.extract_images(response)", (), "background deliver"),
     ("_already_sent = bool(", (), "complete"),
     ("Discarding stale agent result", (), "abort"),
+    ("context_prompt = self._pinned_session_context_prompt(", (), "update context"),
 ]
 
 
@@ -257,6 +262,7 @@ def _complete_hook(indent: str) -> str:
             "    from hermes_lark_streaming.patch import (",
             "        on_message_completed_wait,",
             "        on_message_needs_text_fallback,",
+            "        on_model_update_delivered,",
             "        restore_message_id_for_text_fallback,",
             "    )",
             "    _lark_completion_id = agent_result.get('_hermes_lark_completion_id') or event.message_id",
@@ -274,12 +280,52 @@ def _complete_hook(indent: str) -> str:
             "            'max_tokens': agent_result.get('context_length', 0),",
             "        },",
             "    )",
+            "    on_model_update_delivered(",
+            "        message_id=_lark_completion_id,",
+            "        delivered=_lark_card_sent,",
+            "    )",
             "    if _lark_card_sent:",
             "        agent_result['already_sent'] = True",
             "    else:",
             "        restore_message_id_for_text_fallback(event=event)",
             "        if on_message_needs_text_fallback(message_id=_lark_completion_id):",
             "            agent_result.pop('already_sent', None)",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _update_context_hook(indent: str) -> str:
+    return _make_hook(
+        indent,
+        MK_UPDATE_CONTEXT,
+        MK_UPDATE_CONTEXT_END,
+        [
+            "try:",
+            "    if source.platform.value.lower() in ('feishu', 'lark'):",
+            "        from hermes_lark_streaming.patch import on_model_update_context",
+            "        context_prompt = on_model_update_context(",
+            "            message_id=event.message_id,",
+            "            user_id=getattr(source, 'user_id', '') or '',",
+            "            internal=bool(getattr(event, 'internal', False)),",
+            "            context_prompt=context_prompt,",
+            "        )",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _update_warm_hook(indent: str) -> str:
+    return _make_hook(
+        indent,
+        MK_UPDATE_WARM,
+        MK_UPDATE_WARM_END,
+        [
+            "try:",
+            "    from hermes_lark_streaming.update_notice import get_update_notice_manager",
+            "    get_update_notice_manager().warm_release_cache()",
             "except Exception:",
             "    pass",
         ],
@@ -676,8 +722,10 @@ class Patcher:
         lines = content.splitlines(keepends=True)
 
         hook_defs: list[tuple[str, str, tuple[int, str] | None]] = [
+            ("update_warm", "update warm", _find_module_warm_site(tree, lines)),
             ("normalize", "normalize", _find_handle_message_source_site(tree, lines)),
             ("start", "start", _find_func_body(tree, lines, "_handle_message_with_agent")),
+            ("update_context", "update context", _find_update_context_site(tree, lines)),
             ("complete", "complete", _find_handler_return(tree, lines)),
             ("followup_complete", "followup_complete", _find_followup_complete_site(tree, lines)),
             ("followup_result", "followup_result", _find_followup_result_site(tree, lines)),
@@ -702,8 +750,10 @@ class Patcher:
 
         sites.sort(key=lambda x: x[0], reverse=True)
         _HOOK_FNS = {
+            "update_warm": _update_warm_hook,
             "normalize": _feishu_normalize_hook,
             "start": _start_hook,
+            "update_context": _update_context_hook,
             "complete": _complete_hook,
             "followup_complete": _followup_complete_hook,
             "followup_result": _followup_result_hook,
@@ -742,6 +792,18 @@ def _find_func_body(tree: ast.Module, lines: list[str], name: str) -> tuple[int,
     return None
 
 
+def _find_module_warm_site(tree: ast.Module, lines: list[str]) -> tuple[int, str] | None:
+    imports = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    if not imports:
+        return None
+    last = max(imports, key=lambda node: node.end_lineno or node.lineno)
+    return last.end_lineno or last.lineno, ""
+
+
 def _find_handle_message_source_site(tree: ast.Module, lines: list[str]) -> tuple[int, str] | None:
     for node in ast.walk(tree):
         if isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_message":
@@ -758,6 +820,25 @@ def _find_handle_message_source_site(tree: ast.Module, lines: list[str]) -> tupl
                 ):
                     lineno = stmt.end_lineno or stmt.lineno
                     return lineno, _safe_indent(lines, stmt.lineno - 1)
+    return None
+
+
+def _find_update_context_site(tree: ast.Module, lines: list[str]) -> tuple[int, str] | None:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name != "_handle_message_with_agent":
+            continue
+        for stmt in ast.walk(node):
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == "context_prompt"
+                and isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Attribute)
+                and stmt.value.func.attr == "_pinned_session_context_prompt"
+            ):
+                lineno = stmt.end_lineno or stmt.lineno
+                return lineno, _safe_indent(lines, stmt.lineno - 1)
     return None
 
 

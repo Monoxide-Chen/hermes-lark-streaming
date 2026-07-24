@@ -15,6 +15,7 @@ from inspect import iscoroutinefunction
 from typing import Any
 
 from .controller import get_controller
+from .update_notice import get_update_notice_manager
 
 _logger = logging.getLogger("hermes_lark_streaming")
 
@@ -74,6 +75,39 @@ def restore_message_id_for_text_fallback(*, event: Any) -> None:
         return
     event.message_id = getattr(event, _ORIGINAL_MESSAGE_ID_ATTR, None)
     _logger.info("restored original Feishu message id before text fallback: %s", synthetic_id)
+
+
+def on_model_update_context(
+    *,
+    message_id: str,
+    user_id: str,
+    internal: bool = False,
+    context_prompt: str = "",
+) -> str:
+    """Add an owner-only, one-turn system notice without touching history."""
+    try:
+        notice = get_update_notice_manager().prepare_notice(
+            message_id=message_id,
+            user_id=user_id,
+            internal=internal,
+        )
+    except Exception as exc:
+        _logger.debug("on_model_update_context error: %s", exc, exc_info=True)
+        return context_prompt
+    if not notice:
+        return context_prompt
+    return "\n\n".join(part for part in (context_prompt.strip(), notice) if part)
+
+
+def on_model_update_delivered(*, message_id: str, delivered: bool) -> None:
+    """Finalize update-notice state after the Feishu card delivery result."""
+    try:
+        get_update_notice_manager().finish_notice(
+            message_id=message_id,
+            delivered=delivered,
+        )
+    except Exception as exc:
+        _logger.debug("on_model_update_delivered error: %s", exc, exc_info=True)
 
 
 def _safe_hook(

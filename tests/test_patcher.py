@@ -251,6 +251,14 @@ class TestApplyRemove:
         assert "on_queued_followup_result(" in content
         assert "on_message_completed_wait(" in content
         assert "on_message_needs_text_fallback" in content
+        assert "# HERMES_LARK_UPDATE_CONTEXT_BEGIN" in content
+        assert "# HERMES_LARK_UPDATE_WARM_BEGIN" in content
+        assert "get_update_notice_manager().warm_release_cache()" in content
+        assert "context_prompt = on_model_update_context(" in content
+        assert "user_id=getattr(source, 'user_id', '') or ''" in content
+        assert "internal=bool(getattr(event, 'internal', False))" in content
+        assert "on_model_update_delivered(" in content
+        assert "delivered=_lark_card_sent" in content
         assert "_lark_card_sent = await on_message_completed_wait(" in content
         assert "restore_message_id_for_text_fallback(event=event)" in content
         assert "agent_result.pop('already_sent', None)" in content
