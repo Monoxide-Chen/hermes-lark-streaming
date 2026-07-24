@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 新增
+
+- 飞书斜杠命令的即时结果统一为 CardKit 完成态卡片；skill/bundle 等进入 agent loop 的命令继续使用真实流式卡片。
+- gateway 生命周期通知与 self-improvement/background review 通知使用 CardKit 完成态卡片，失败时回退 Hermes 原始文本发送。
+
+### 修复
+
+- `/new`、`/reset` 等 `EphemeralReply` 命令改用卡片后仍保留 TTL 自动删除语义。
+- 补齐 agent 运行期间的 command bypass 路径，避免 `/stop`、`/status` 等绕过 CardKit。
+- 旧版仅安装普通 slash hook 时，重新运行 `install` 会自动升级为完整的 normal/direct/bypass hooks。
+
+### Added
+
+- Immediate Feishu slash-command results now use completed CardKit cards, while skill/bundle commands that enter the agent loop keep real streaming cards.
+- Gateway lifecycle and deferred self-improvement/background-review notices now use completed CardKit cards, with fallback to Hermes text delivery.
+
+### Fixed
+
+- Preserve `EphemeralReply` TTL deletion for `/new`, `/reset`, and similar commands after card delivery.
+- Cover active-agent command bypass paths such as `/stop` and `/status`.
+- Re-running `install` upgrades legacy normal-only slash hooks to the complete normal/direct/bypass set.
+
 ## [0.11.2] - 2026-07-01
 
 ### 修复

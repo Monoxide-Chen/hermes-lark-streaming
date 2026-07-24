@@ -365,3 +365,61 @@ async def on_background_deliver(
     except Exception as exc:
         _logger.warning("on_background_deliver error: %s", exc, exc_info=True)
         return False
+
+
+async def on_slash_command_deliver(
+    *,
+    chat_id: str,
+    command: str,
+    content: str,
+    reply_to_message_id: str | None = None,
+) -> str | None:
+    """Deliver an immediate slash result as a completed CardKit card."""
+    try:
+        ctrl = get_controller()
+        if not ctrl.enabled:
+            return None
+        return await ctrl.on_static_deliver(
+            chat_id=chat_id,
+            command=command,
+            content=content,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except Exception as exc:
+        _logger.warning("on_slash_command_deliver error: %s", exc, exc_info=True)
+        return None
+
+
+_LIFECYCLE_NOTIFICATION_PREFIXES = (
+    "⚠️ Gateway shutting down",
+    "⚠️ Gateway restarting",
+    "♻ Gateway restarted",
+    "♻️ Gateway online",
+    "✅ Hermes update finished",
+    "❌ Hermes update failed",
+    "❌ Hermes update timed out",
+)
+
+
+async def on_feishu_notification_deliver(
+    *,
+    chat_id: str,
+    content: str,
+    reply_to_message_id: str | None = None,
+) -> str | None:
+    """Convert known Hermes lifecycle notices; return None for ordinary text."""
+    text = str(content or "").strip()
+    if not text.startswith(_LIFECYCLE_NOTIFICATION_PREFIXES):
+        return None
+    try:
+        ctrl = get_controller()
+        if not ctrl.enabled:
+            return None
+        return await ctrl.on_static_deliver(
+            chat_id=chat_id,
+            content=text,
+            reply_to_message_id=reply_to_message_id,
+        )
+    except Exception as exc:
+        _logger.warning("on_feishu_notification_deliver error: %s", exc, exc_info=True)
+        return None

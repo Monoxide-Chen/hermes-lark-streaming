@@ -584,3 +584,65 @@ def build_background_card(preview: str, content: str) -> dict[str, Any]:
         if chunk.strip():
             card["body"]["elements"].append({"tag": "markdown", "content": chunk})
     return card
+
+
+def _build_static_result_card(
+    title: str,
+    content: str,
+    *,
+    template: str,
+    title_zh: str | None = None,
+) -> dict[str, Any]:
+    """Build a completed CardKit card for content that already exists."""
+    body = content.strip() or "(No response generated)"
+    card: dict[str, Any] = {
+        "schema": "2.0",
+        "config": {
+            "wide_screen_mode": True,
+            "locales": _LOCALES,
+            "summary": {
+                "content": body[:120].replace("\n", " ").replace("```", "").strip(),
+            },
+        },
+        "header": {"title": {"tag": "plain_text", "content": title}, "template": template},
+        "body": {"elements": []},
+    }
+    if title_zh is not None:
+        card["header"]["title"]["i18n_content"] = _i18n(title, title_zh)
+    for chunk in _split_long_text(optimize_markdown_style(body)):
+        if chunk.strip():
+            card["body"]["elements"].append({"tag": "markdown", "content": chunk})
+    return card
+
+
+def build_command_card(command: str, content: str) -> dict[str, Any]:
+    """Render an immediate slash-command result as a completed card."""
+    normalized_command = command.strip().lstrip("/") or "command"
+    body = content.strip() or "(No response generated)"
+    is_error = body.startswith(("❌", "✗", "Error", "Unknown command"))
+    return _build_static_result_card(
+        f"{'❌' if is_error else '✅'} /{normalized_command}",
+        body,
+        template="red" if is_error else "green",
+    )
+
+
+def build_notification_card(content: str) -> dict[str, Any]:
+    """Render a gateway lifecycle notification as a completed card."""
+    body = content.strip() or "(Empty notification)"
+    if body.startswith(("❌", "✗")):
+        prefix, template = "❌", "red"
+    elif body.startswith(("⚠", "⏳")):
+        prefix, template = "⚠️", "orange"
+    elif body.startswith(("✅", "♻")):
+        prefix, template = "✅", "green"
+    else:
+        prefix, template = "", "blue"
+    title = f"{prefix} Hermes notification".strip()
+    title_zh = f"{prefix} Hermes 通知".strip()
+    return _build_static_result_card(
+        title,
+        body,
+        template=template,
+        title_zh=title_zh,
+    )
