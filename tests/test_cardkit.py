@@ -71,17 +71,17 @@ class TestOptimizeMarkdownStyle:
         assert "#### Title" in result
         assert "# Code heading" in result
 
-    def test_moves_chinese_label_colon_outside_bold_span(self) -> None:
+    def test_adjacent_bold_gets_invisible_parser_boundary(self) -> None:
         text = "- **子智能体一\uFF1A**你好!我是子智能体一。"
-        assert optimize_markdown_style(text) == "- **子智能体一**\uFF1A你好!我是子智能体一。"
+        result = optimize_markdown_style(text)
+        assert result == "- **子智能体一\uFF1A**&#8203;你好!我是子智能体一。"
+        assert result.replace("&#8203;", "") == text
 
-    def test_moves_ascii_label_colon_outside_bold_span(self) -> None:
-        text = "- **Agent 1:**Hello"
-        assert optimize_markdown_style(text) == "- **Agent 1**:Hello"
-
-    def test_separates_adjacent_bold_and_word_content(self) -> None:
-        text = "**重点**下一句"
-        assert optimize_markdown_style(text) == "**重点** 下一句"
+    def test_adjacent_ascii_bold_keeps_all_model_characters(self) -> None:
+        text = "**Agent 1:**Hello"
+        result = optimize_markdown_style(text)
+        assert result == "**Agent 1:**&#8203;Hello"
+        assert result.replace("&#8203;", "") == text
 
     def test_valid_bold_spacing_is_unchanged(self) -> None:
         text = "**粗体** 后续文本"
@@ -510,6 +510,18 @@ class TestBuildSegmentCompleteCard:
         summary = card["config"].get("summary", {}).get("content", "")
         assert len(summary) <= 120
 
+    def test_invisible_bold_boundary_stays_out_of_summary(self) -> None:
+        model_text = "- **子智能体一\uFF1A**你好!我是子智能体一。"
+        card = build_complete_card(
+            segments=[_seg("answer", model_text)],
+            all_tool_steps=[],
+        )
+        body = card["body"]["elements"][0]["content"]
+        summary = card["config"]["summary"]["content"]
+
+        assert body == "- **子智能体一\uFF1A**&#8203;你好!我是子智能体一。"
+        assert summary == model_text
+
 
 class TestBuildCronCard:
     def test_basic_card_structure(self) -> None:
@@ -527,6 +539,17 @@ class TestBuildCronCard:
         summary = card["config"]["summary"]["content"]
         assert summary.startswith("Line 1 Line 2")
         assert len(summary) <= 120
+
+    def test_invisible_bold_boundary_stays_out_of_summary(self) -> None:
+        from hermes_lark_streaming.cardkit.builder import build_cron_card
+
+        model_text = "- **子智能体一\uFF1A**你好!我是子智能体一。"
+        card = build_cron_card(model_text)
+        body = card["body"]["elements"][0]["content"]
+        summary = card["config"]["summary"]["content"]
+
+        assert body == "- **子智能体一\uFF1A**&#8203;你好!我是子智能体一。"
+        assert summary == model_text
 
     def test_empty_content(self) -> None:
         from hermes_lark_streaming.cardkit.builder import build_cron_card
