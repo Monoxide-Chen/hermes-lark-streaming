@@ -156,6 +156,7 @@ def test_release_request_failure_keeps_notice_unavailable(tmp_path: Path) -> Non
         else:
             raise AssertionError("request failure must fail closed")
 
+    manager._checked_at = 1e20
     assert manager.prepare_notice(message_id="msg", user_id="ou_owner") == ""
 
 
