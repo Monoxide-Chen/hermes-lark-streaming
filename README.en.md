@@ -170,7 +170,7 @@ $HERMES_PYTHON -m pip uninstall hermes-lark-streaming
 
 ## How It Works
 
-The plugin injects hook calls into `gateway/run.py` and `cron/scheduler.py` via AST patching. All business logic lives in the `hermes_lark_streaming` package.
+The plugin injects hook calls into `gateway/run.py`, `gateway/platforms/base.py`, `plugins/platforms/feishu/adapter.py`, and `cron/scheduler.py` via AST patching. All business logic lives in the `hermes_lark_streaming` package.
 
 **Message flow:**
 
@@ -198,7 +198,7 @@ If a message is deleted/recalled, updates are auto-terminated.
 
 ## Notes
 
-- `install` modifies `~/.hermes/hermes-agent/gateway/run.py` and `cron/scheduler.py`, and creates `.hermes_lark.bak` backups
+- `install` modifies `gateway/run.py`, `gateway/platforms/base.py`, `plugins/platforms/feishu/adapter.py`, and `cron/scheduler.py`, and creates `.hermes_lark.bak` backups
 - Re-run `verify` + `install` after Hermes updates
 - The plugin complements the built-in Feishu adapter: plugin handles streaming cards, built-in adapter handles message routing
 - Only affects Feishu/Lark platform — other platforms are unaffected

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .patcher import CronPatcher, Patcher
+    from .patcher import BasePatcher, CronPatcher, FeishuAdapterPatcher, Patcher
 
 
 def main() -> int:
@@ -42,7 +42,7 @@ def _print_usage() -> None:
     print("Usage: python -m hermes_lark_streaming <command>")
     print()
     print("Commands:")
-    print("  install    Apply AST patch to gateway/run.py and cron/scheduler.py")
+    print("  install    Apply CardKit hooks to Hermes gateway sources")
     print("  uninstall  Remove AST patch")
     print("  restore    Restore from backup")
     print("  status     Show current patch status")
@@ -66,6 +66,32 @@ def _get_cron_patcher() -> CronPatcher | None:
         return CronPatcher()
     except PatcherError:
         return None
+
+
+def _get_base_patcher() -> BasePatcher | None:
+    from .patcher import BasePatcher, PatcherError
+
+    try:
+        return BasePatcher()
+    except PatcherError:
+        return None
+
+
+def _get_feishu_adapter_patcher() -> FeishuAdapterPatcher | None:
+    from .patcher import FeishuAdapterPatcher, PatcherError
+
+    try:
+        return FeishuAdapterPatcher()
+    except PatcherError:
+        return None
+
+
+def _base_patcher_status(patcher: BasePatcher) -> str:
+    if patcher.is_fully_patched():
+        return "installed"
+    if patcher.is_patched():
+        return "partial (rerun install)"
+    return "not installed"
 
 
 def _cmd_install() -> int:
@@ -101,6 +127,19 @@ def _cmd_install() -> int:
         except Exception as e:
             print(f"Cron hook skipped: {e}")
 
+    for label, optional_patcher in (
+        ("Slash command", _get_base_patcher()),
+        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+    ):
+        if optional_patcher is None:
+            continue
+        try:
+            optional_patcher.verify_target()
+            optional_patcher.apply()
+            print(f"{label} hook ready.")
+        except Exception as e:
+            print(f"{label} hook skipped: {e}")
+
     return 0
 
 
@@ -109,13 +148,18 @@ def _cmd_uninstall() -> int:
     if patcher is None:
         return 1
 
-    cron_patcher = _get_cron_patcher()
-    if cron_patcher is not None and cron_patcher.is_patched():
+    for label, optional_patcher in (
+        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+        ("Slash command", _get_base_patcher()),
+        ("Cron", _get_cron_patcher()),
+    ):
+        if optional_patcher is None or not optional_patcher.is_patched():
+            continue
         try:
-            cron_patcher.remove()
-            print("Cron hook removed.")
+            optional_patcher.remove()
+            print(f"{label} hook removed.")
         except Exception as e:
-            print(f"Cron hook remove failed: {e}")
+            print(f"{label} hook remove failed: {e}")
 
     if not patcher.is_patched():
         print("Not patched.")
@@ -136,11 +180,16 @@ def _cmd_restore() -> int:
     if patcher is None:
         return 1
 
-    cron_patcher = _get_cron_patcher()
-    if cron_patcher is not None:
+    for label, optional_patcher in (
+        ("Cron", _get_cron_patcher()),
+        ("Slash command", _get_base_patcher()),
+        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+    ):
+        if optional_patcher is None:
+            continue
         try:
-            cron_patcher.restore()
-            print("Cron hook restored.")
+            optional_patcher.restore()
+            print(f"{label} hook restored.")
         except Exception:
             pass
 
@@ -175,6 +224,12 @@ def _cmd_status() -> int:
     cron_patcher = _get_cron_patcher()
     if cron_patcher is not None:
         print(f"Cron hook: {'installed' if cron_patcher.is_patched() else 'not installed'}")
+    base_patcher = _get_base_patcher()
+    if base_patcher is not None:
+        print(f"Slash command hook: {_base_patcher_status(base_patcher)}")
+    feishu_patcher = _get_feishu_adapter_patcher()
+    if feishu_patcher is not None:
+        print(f"Feishu lifecycle notice hook: {'installed' if feishu_patcher.is_patched() else 'not installed'}")
 
     # Check config
     from .config import Config
@@ -223,6 +278,20 @@ def _cmd_verify() -> int:
             print(f"Cron incompatible: {e}")
             return 1
         print("Cron target compatible.")
+
+    for label, optional_patcher, path_attr in (
+        ("Slash command", _get_base_patcher(), "base_path"),
+        ("Feishu lifecycle notice", _get_feishu_adapter_patcher(), "adapter_path"),
+    ):
+        if optional_patcher is None:
+            continue
+        print(f"{label} target: {getattr(optional_patcher, path_attr)}")
+        try:
+            optional_patcher.verify_target()
+        except Exception as e:
+            print(f"{label} incompatible: {e}")
+            return 1
+        print(f"{label} target compatible.")
 
     return 0
 

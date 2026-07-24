@@ -52,6 +52,14 @@ cron/scheduler.py (Hermes)
   └─ CronPatcher (patcher.py) injects on_cron_deliver into _deliver_result
        └─ intercepts feishu/lark targets → build_cron_card → send_card_to_chat
 
+gateway/platforms/base.py (Hermes)
+  └─ BasePatcher routes immediate slash results from normal + active-session bypass paths
+       └─ completed CardKit card; EphemeralReply TTL is preserved
+
+plugins/platforms/feishu/adapter.py (Hermes)
+  └─ FeishuAdapterPatcher recognizes gateway lifecycle notices at the text boundary
+       └─ completed CardKit card; original text send remains the failure fallback
+
 StreamCardController (singleton, controller.py)
   ├─ CardSession per message (state machine: IDLE→CREATING→STREAMING→COMPLETED/FAILED/ABORTED)
   │   └─ stream segments: CardSession.segment_state (SegmentState)

@@ -117,8 +117,9 @@ being checked.
 "$HERMES_PYTHON" -m hermes_lark_streaming install
 ```
 
-This patches `gateway/run.py` and `cron/scheduler.py` in place. A `.hermes_lark.bak`
-backup is created next to each file.
+This patches `gateway/run.py`, `gateway/platforms/base.py`,
+`plugins/platforms/feishu/adapter.py`, and `cron/scheduler.py` in place. A
+`.hermes_lark.bak` backup is created next to each file.
 
 ## Step 6 — Restart the gateway
 
