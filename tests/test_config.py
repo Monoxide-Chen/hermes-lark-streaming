@@ -132,6 +132,52 @@ class TestCardDurationSec:
         assert cfg.card_duration_sec == 600
 
 
+class TestUpdateNotice:
+    def test_owner_enables_notice_by_default(self) -> None:
+        cfg = _make_config(
+            {"streaming": {"update_notice": {"owner_user_id": "ou_owner"}}}
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            assert cfg.update_notice_enabled is True
+            assert cfg.update_notice_owner_user_id == "ou_owner"
+
+    def test_explicit_disable_wins(self) -> None:
+        cfg = _make_config(
+            {
+                "streaming": {
+                    "update_notice": {
+                        "enabled": False,
+                        "owner_user_id": "ou_owner",
+                    }
+                }
+            }
+        )
+        assert cfg.update_notice_enabled is False
+
+    def test_owner_environment_override(self) -> None:
+        cfg = _make_config(
+            {"streaming": {"update_notice": {"owner_user_id": "ou_config"}}}
+        )
+        with patch.dict(os.environ, {"HERMES_LARK_OWNER_USER_ID": "ou_env"}):
+            assert cfg.update_notice_owner_user_id == "ou_env"
+
+    def test_ttl_has_safe_minimum(self) -> None:
+        cfg = _make_config(
+            {"streaming": {"update_notice": {"check_ttl_sec": 1}}}
+        )
+        assert cfg.update_notice_check_ttl_sec == 60
+
+    def test_state_path_environment_override(self) -> None:
+        cfg = _make_config(
+            {"streaming": {"update_notice": {"state_path": "from-config.json"}}}
+        )
+        with patch.dict(
+            os.environ,
+            {"HERMES_LARK_UPDATE_STATE_PATH": "/tmp/from-env.json"},
+        ):
+            assert cfg.update_notice_state_path == "/tmp/from-env.json"
+
+
 class TestFeishuAppId:
     def test_from_env(self) -> None:
         cfg = _make_config({})

@@ -95,7 +95,21 @@ Also enable streaming in the same config:
 ```yaml
 streaming:
   enabled: true
+  update_notice:
+    owner_user_id: ou_xxxxx
+    repo: Monoxide-Chen/hermes-lark-streaming
+    check_ttl_sec: 86400
+    state_path: .hermes-lark-streaming/update-state.json
 ```
+
+The optional `update_notice` block performs a TTL-cached GitHub Release check
+in the background. It injects a one-turn notice only for `owner_user_id`; the
+model may ask whether to update, but no update is run without explicit consent.
+Without `owner_user_id` (or `HERMES_LARK_OWNER_USER_ID`) this feature does
+nothing. Relative state paths are resolved under `HERMES_HOME`. The release
+cache is warmed when the gateway module loads and persisted for the next
+restart; a first-ever startup never blocks message handling while GitHub is
+being checked.
 
 ## Step 5 — Install the hooks
 

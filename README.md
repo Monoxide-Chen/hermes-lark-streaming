@@ -72,7 +72,25 @@ curl https://raw.githubusercontent.com/Cheerwhy/hermes-lark-streaming/main/INSTA
 ```yaml
 streaming:
   enabled: true
+  update_notice:
+    owner_user_id: ou_xxxxx  # only this Feishu/Lark user sees release notices
+    repo: Monoxide-Chen/hermes-lark-streaming
+    check_ttl_sec: 86400
+    state_path: .hermes-lark-streaming/update-state.json
 ```
+
+`update_notice` checks GitHub Releases on a background thread. When a newer
+version is cached, only the configured owner receives a one-turn system hint:
+the model briefly asks whether to update at the end of its next answer. The
+hint is not written to conversation history, is recorded as notified only
+after the CardKit reply is delivered, and never authorizes an update by itself.
+If `owner_user_id` is absent, the feature is fail-closed and injects nothing.
+The gateway pre-warms and persists the release cache without delaying message
+handling, so a cached update can be included on the owner's first turn after a
+restart. On the first-ever startup, if GitHub has not answered before that turn
+begins, the notice is offered on the owner's next model turn.
+`HERMES_LARK_OWNER_USER_ID` and `HERMES_LARK_UPDATE_STATE_PATH` may be used
+instead of storing those two values in YAML.
 
 ### 凭据
 
