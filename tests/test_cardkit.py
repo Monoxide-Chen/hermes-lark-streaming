@@ -14,7 +14,9 @@ from hermes_lark_streaming.cardkit.builder import (
     _escape_md,
     _format_elapsed,
     _longest_backtick_run,
+    build_command_card,
     build_complete_card,
+    build_notification_card,
     build_streaming_card_v2,
 )
 from hermes_lark_streaming.cardkit.markdown import (
@@ -556,6 +558,35 @@ class TestBuildCronCard:
 
         card = build_cron_card("")
         assert card["body"]["elements"] == []
+
+
+class TestBuildStaticCards:
+    def test_command_card_is_completed_not_streaming(self) -> None:
+        card = build_command_card("sessions", "Current: `session-1`")
+
+        assert card["schema"] == "2.0"
+        assert card["header"]["title"]["content"] == "✅ /sessions"
+        assert card["header"]["template"] == "green"
+        assert "streaming_mode" not in card["config"]
+        assert "session-1" in card["body"]["elements"][0]["content"]
+
+    def test_command_error_uses_red_header(self) -> None:
+        card = build_command_card("/model", "❌ Unknown model")
+
+        assert card["header"]["title"]["content"] == "❌ /model"
+        assert card["header"]["template"] == "red"
+
+    def test_lifecycle_warning_uses_notice_card(self) -> None:
+        card = build_notification_card(
+            "⚠️ Gateway shutting down — Your current task will be interrupted."
+        )
+
+        title = card["header"]["title"]
+        assert title["content"] == "⚠️ Hermes notification"
+        assert title["i18n_content"]["en_us"] == "⚠️ Hermes notification"
+        assert title["i18n_content"]["zh_cn"] == "⚠️ Hermes 通知"
+        assert card["header"]["template"] == "orange"
+        assert "streaming_mode" not in card["config"]
 
     def test_table_content_preserved(self) -> None:
         from hermes_lark_streaming.cardkit.builder import build_cron_card

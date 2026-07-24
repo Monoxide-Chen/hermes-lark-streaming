@@ -137,10 +137,18 @@ async def test_background_review_deferred_until_complete() -> None:
     assert ctrl.defer_background_review(message_id="msg_bg", text="review", sender=sent.append)
     assert sent == []
 
-    with patch.object(ctrl, "_do_complete_card_inner", new_callable=AsyncMock, return_value=True):
+    with (
+        patch.object(ctrl, "_do_complete_card_inner", new_callable=AsyncMock, return_value=True),
+        patch.object(ctrl, "on_static_deliver", new_callable=AsyncMock, return_value="om_review") as deliver,
+    ):
         await ctrl._do_complete_card(session)
 
-    assert sent == ["review"]
+    deliver.assert_awaited_once_with(
+        chat_id="chat_456",
+        content="review",
+        reply_to_message_id=None,
+    )
+    assert sent == []
     assert "msg_bg" not in ctrl._sessions
 
 
@@ -152,16 +160,42 @@ def test_background_review_without_active_session_not_deferred() -> None:
     assert sent == []
 
 
-def test_background_review_after_flush_not_deferred() -> None:
+@pytest.mark.asyncio
+async def test_background_review_after_flush_not_deferred() -> None:
     ctrl = _setup_ctrl()
     session = _make_session("msg_bg")
     ctrl._sessions["msg_bg"] = session
     sent: list[str] = []
 
-    ctrl._flush_deferred_background_reviews(session)
+    await ctrl._flush_deferred_background_reviews(session)
 
     assert not ctrl.defer_background_review(message_id="msg_bg", text="review", sender=sent.append)
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_background_review_card_failure_falls_back_to_sender() -> None:
+    ctrl = _setup_ctrl()
+    session = _make_session("msg_bg")
+    session.anchor_id = "om_anchor"
+    ctrl._sessions["msg_bg"] = session
+    sent: list[str] = []
+    assert ctrl.defer_background_review(message_id="msg_bg", text="review", sender=sent.append)
+
+    with patch.object(
+        ctrl,
+        "on_static_deliver",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as deliver:
+        await ctrl._flush_deferred_background_reviews(session)
+
+    deliver.assert_awaited_once_with(
+        chat_id="chat_456",
+        content="review",
+        reply_to_message_id="om_anchor",
+    )
+    assert sent == ["review"]
 
 
 # ── 辅助函数 ──
@@ -1346,3 +1380,35 @@ class TestBackgroundDeliver:
         assert result is False
         mock_client.upload_image.assert_not_called()
         mock_client.send_card_to_chat.assert_not_called()
+
+
+class TestStaticDeliver:
+    @pytest.mark.asyncio
+    async def test_command_returns_card_message_id(self) -> None:
+        ctrl = _setup_ctrl()
+        ctrl._client.send_card_to_chat.return_value = "om_command"
+
+        message_id = await ctrl.on_static_deliver(
+            chat_id="oc_1",
+            command="new",
+            content="✨ Session reset! Starting fresh.",
+            reply_to_message_id="om_source",
+        )
+
+        assert message_id == "om_command"
+        args, kwargs = ctrl._client.send_card_to_chat.call_args
+        assert args[0] == "oc_1"
+        assert args[1]["header"]["title"]["content"] == "✅ /new"
+        assert kwargs["reply_to_message_id"] == "om_source"
+
+    @pytest.mark.asyncio
+    async def test_notification_returns_none_on_card_failure(self) -> None:
+        ctrl = _setup_ctrl()
+        ctrl._client.send_card_to_chat.side_effect = RuntimeError("down")
+
+        message_id = await ctrl.on_static_deliver(
+            chat_id="oc_1",
+            content="⚠️ Gateway shutting down",
+        )
+
+        assert message_id is None

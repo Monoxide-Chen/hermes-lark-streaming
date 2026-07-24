@@ -170,7 +170,7 @@ $HERMES_PYTHON -m pip uninstall hermes-lark-streaming
 
 ## 工作原理
 
-插件通过 AST 注入在 `gateway/run.py` 和 `cron/scheduler.py` 插入 hook 调用，所有业务逻辑在 `hermes_lark_streaming` 包内完成。
+插件通过 AST 注入在 `gateway/run.py`、`gateway/platforms/base.py`、`plugins/platforms/feishu/adapter.py` 和 `cron/scheduler.py` 插入 hook 调用，所有业务逻辑在 `hermes_lark_streaming` 包内完成。
 
 **消息处理流程：**
 
@@ -198,7 +198,7 @@ $HERMES_PYTHON -m pip uninstall hermes-lark-streaming
 
 ## 注意事项
 
-- `install` 会修改 `~/.hermes/hermes-agent/gateway/run.py` 和 `cron/scheduler.py`，自动创建 `.hermes_lark.bak` 备份
+- `install` 会修改 `gateway/run.py`、`gateway/platforms/base.py`、`plugins/platforms/feishu/adapter.py` 和 `cron/scheduler.py`，自动创建 `.hermes_lark.bak` 备份
 - Hermes 更新后需重新运行 `verify` + `install`
 - 插件与 Hermes 内置飞书适配器互补工作：插件负责流式卡片，内置适配器负责消息收发
 - 仅对飞书平台生效，其他平台不受影响

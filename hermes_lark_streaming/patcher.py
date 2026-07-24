@@ -185,8 +185,28 @@ def _default_cron_path() -> Path:
     return _resolve_module_path("cron.scheduler", _code_roots())
 
 
+def _default_base_path() -> Path:
+    return _resolve_module_path("gateway.platforms.base", _code_roots())
+
+
+def _default_feishu_adapter_path() -> Path:
+    return _resolve_module_path("plugins.platforms.feishu.adapter", _code_roots())
+
+
 MK_CRON_DELIVER = f"# {PREFIX}_CRON_DELIVER_BEGIN"
 MK_CRON_DELIVER_END = f"# {PREFIX}_CRON_DELIVER_END"
+MK_SLASH_DELIVER = f"# {PREFIX}_SLASH_DELIVER_BEGIN"
+MK_SLASH_DELIVER_END = f"# {PREFIX}_SLASH_DELIVER_END"
+MK_SLASH_DIRECT = f"# {PREFIX}_SLASH_DIRECT_BEGIN"
+MK_SLASH_DIRECT_END = f"# {PREFIX}_SLASH_DIRECT_END"
+MK_FEISHU_NOTICE = f"# {PREFIX}_FEISHU_NOTICE_BEGIN"
+MK_FEISHU_NOTICE_END = f"# {PREFIX}_FEISHU_NOTICE_END"
+_MAX_SLASH_BYPASS_HOOKS = 8
+
+
+def _slash_bypass_markers(index: int) -> tuple[str, str]:
+    stem = f"# {PREFIX}_SLASH_BYPASS_{index}"
+    return f"{stem}_BEGIN", f"{stem}_END"
 
 _ANCHOR_CHECKS: list[tuple[str, tuple[str, ...], str]] = [
     ("Restart typing indicator so the user sees activity", (), "interrupt"),
@@ -521,6 +541,118 @@ def _bg_deliver_hook(indent: str) -> str:
             "            text_content = ''",
             "            if not images and not media_files:",
             "                return",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _slash_deliver_hook(indent: str) -> str:
+    """Intercept immediate slash results in the normal delivery pipeline."""
+    return _make_hook(
+        indent,
+        MK_SLASH_DELIVER,
+        MK_SLASH_DELIVER_END,
+        [
+            "try:",
+            "    _lark_platform = getattr(getattr(event.source, 'platform', None), 'value', '')",
+            "    _lark_raw_text = str(getattr(event, 'text', '') or '').lstrip()",
+            "    if (",
+            "        _lark_platform.lower() in ('feishu', 'lark')",
+            "        and _lark_raw_text.startswith('/')",
+            "        and text_content",
+            "        and not images",
+            "        and not local_files",
+            "        and not media_files",
+            "    ):",
+            "        from hermes_lark_streaming.patch import on_slash_command_deliver",
+            "        _lark_command = _lark_raw_text.split(maxsplit=1)[0].lstrip('/').split('@', 1)[0]",
+            "        _lark_reply_anchor = getattr(event, 'reply_to_message_id', None)",
+            "        if not _lark_reply_anchor and getattr(event.source, 'thread_id', None):",
+            "            _lark_reply_anchor = _reply_anchor_for_event(event)",
+            "        _lark_command_msg_id = await on_slash_command_deliver(",
+            "            chat_id=event.source.chat_id,",
+            "            command=_lark_command,",
+            "            content=text_content,",
+            "            reply_to_message_id=_lark_reply_anchor,",
+            "        )",
+            "        if _lark_command_msg_id:",
+            "            text_content = ''",
+            "            delivery_attempted = True",
+            "            delivery_succeeded = True",
+            "            if _ephemeral_ttl and _ephemeral_ttl > 0:",
+            "                self._schedule_ephemeral_delete(",
+            "                    chat_id=event.source.chat_id,",
+            "                    message_id=_lark_command_msg_id,",
+            "                    ttl_seconds=_ephemeral_ttl,",
+            "                )",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _slash_direct_deliver_hook(
+    indent: str,
+    *,
+    begin: str,
+    end: str,
+) -> str:
+    """Intercept slash results on active-session fast paths."""
+    return _make_hook(
+        indent,
+        begin,
+        end,
+        [
+            "try:",
+            "    _lark_platform = getattr(getattr(event.source, 'platform', None), 'value', '')",
+            "    _lark_raw_text = str(getattr(event, 'text', '') or '').lstrip()",
+            "    if (",
+            "        _lark_platform.lower() in ('feishu', 'lark')",
+            "        and _lark_raw_text.startswith('/')",
+            "        and _text",
+            "    ):",
+            "        from hermes_lark_streaming.patch import on_slash_command_deliver",
+            "        _lark_command = _lark_raw_text.split(maxsplit=1)[0].lstrip('/').split('@', 1)[0]",
+            "        _lark_reply_anchor = getattr(event, 'reply_to_message_id', None)",
+            "        if not _lark_reply_anchor and getattr(event.source, 'thread_id', None):",
+            "            _lark_reply_anchor = _reply_anchor_for_event(event)",
+            "        _lark_command_msg_id = await on_slash_command_deliver(",
+            "            chat_id=event.source.chat_id,",
+            "            command=_lark_command,",
+            "            content=_text,",
+            "            reply_to_message_id=_lark_reply_anchor,",
+            "        )",
+            "        if _lark_command_msg_id:",
+            "            _text = None",
+            "            if _eph_ttl and _eph_ttl > 0:",
+            "                self._schedule_ephemeral_delete(",
+            "                    chat_id=event.source.chat_id,",
+            "                    message_id=_lark_command_msg_id,",
+            "                    ttl_seconds=_eph_ttl,",
+            "                )",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _feishu_notice_hook(indent: str) -> str:
+    """Route known lifecycle notices through a completed CardKit card."""
+    return _make_hook(
+        indent,
+        MK_FEISHU_NOTICE,
+        MK_FEISHU_NOTICE_END,
+        [
+            "try:",
+            "    from hermes_lark_streaming.patch import on_feishu_notification_deliver",
+            "    _lark_notice_msg_id = await on_feishu_notification_deliver(",
+            "        chat_id=chat_id,",
+            "        content=content,",
+            "        reply_to_message_id=reply_to,",
+            "    )",
+            "    if _lark_notice_msg_id:",
+            "        return SendResult(success=True, message_id=_lark_notice_msg_id)",
             "except Exception:",
             "    pass",
         ],
@@ -911,3 +1043,266 @@ class CronPatcher:
         backup = self.cron_path.with_suffix(self.cron_path.suffix + _BACKUP_SUFFIX)
         if not backup.exists():
             shutil.copy2(self.cron_path, backup)
+
+
+def _unwrap_ephemeral_sites(
+    tree: ast.Module,
+    lines: list[str],
+    function_name: str,
+) -> list[tuple[int, str]]:
+    """Return insertion sites immediately after ``_unwrap_ephemeral`` assignments."""
+    sites: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) or node.name != function_name:
+            continue
+        for stmt in ast.walk(node):
+            if not isinstance(stmt, ast.Assign) or not isinstance(stmt.value, ast.Call):
+                continue
+            func = stmt.value.func
+            if not isinstance(func, ast.Attribute) or func.attr != "_unwrap_ephemeral":
+                continue
+            target_names = {
+                elt.id
+                for target in stmt.targets
+                if isinstance(target, (ast.Tuple, ast.List))
+                for elt in target.elts
+                if isinstance(elt, ast.Name)
+            }
+            if not {"_text", "_eph_ttl"}.issubset(target_names):
+                continue
+            end_lineno = stmt.end_lineno or stmt.lineno
+            sites.append((end_lineno, _safe_indent(lines, stmt.lineno - 1)))
+    return sorted(sites)
+
+
+class BasePatcher:
+    """Inject completed-card routing for immediate slash-command results."""
+
+    def __init__(self, base_path: Path | None = None) -> None:
+        self.base_path = base_path or _default_base_path()
+        if not self.base_path.exists():
+            tried = ", ".join(str(r) for r in _code_roots())
+            raise PatcherError(
+                f"gateway/platforms/base.py not found: {self.base_path} "
+                f"(tried: {tried}). "
+                f"Set HERMES_HOME to the dir containing hermes-agent/ and rerun."
+            )
+
+    @staticmethod
+    def _all_marker_pairs() -> list[tuple[str, str]]:
+        return [
+            (MK_SLASH_DELIVER, MK_SLASH_DELIVER_END),
+            (MK_SLASH_DIRECT, MK_SLASH_DIRECT_END),
+            *[_slash_bypass_markers(i) for i in range(_MAX_SLASH_BYPASS_HOOKS)],
+        ]
+
+    def is_patched(self) -> bool:
+        return MK_SLASH_DELIVER in self.base_path.read_text(encoding="utf-8")
+
+    def is_fully_patched(self) -> bool:
+        content = self.base_path.read_text(encoding="utf-8")
+        if MK_SLASH_DELIVER not in content or MK_SLASH_DIRECT not in content:
+            return False
+        try:
+            tree = ast.parse(content)
+        except SyntaxError:
+            return False
+        lines = content.splitlines(keepends=True)
+        bypass_count = len(_unwrap_ephemeral_sites(tree, lines, "handle_message"))
+        return bypass_count > 0 and all(
+            begin in content and end in content
+            for begin, end in (
+                _slash_bypass_markers(i) for i in range(bypass_count)
+            )
+        )
+
+    def verify_target(self) -> None:
+        content = self.base_path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+        names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+        }
+        required = {
+            "_process_message_background",
+            "_dispatch_active_session_command",
+            "handle_message",
+        }
+        missing = sorted(required - names)
+        if missing:
+            raise PatcherError(
+                f"Cannot find slash delivery targets in base.py: {', '.join(missing)}"
+            )
+        if "# Auto-TTS: if voice message" not in content:
+            raise PatcherError(
+                "Cannot find slash delivery anchor in base.py — Hermes version may be incompatible"
+            )
+        lines = content.splitlines(keepends=True)
+        if not _unwrap_ephemeral_sites(tree, lines, "_dispatch_active_session_command"):
+            raise PatcherError(
+                "Cannot find active command unwrap in base.py — Hermes version may be incompatible"
+            )
+        if not _unwrap_ephemeral_sites(tree, lines, "handle_message"):
+            raise PatcherError(
+                "Cannot find bypass command unwrap in base.py — Hermes version may be incompatible"
+            )
+
+    def apply(self) -> None:
+        if self.is_fully_patched():
+            return
+        self.verify_target()
+        content = self.base_path.read_text(encoding="utf-8")
+        if any(begin in content for begin, _ in self._all_marker_pairs()):
+            for begin, end in self._all_marker_pairs():
+                content = _remove_block(content, begin, end)
+        else:
+            self._backup()
+
+        tree = ast.parse(content)
+        lines = content.splitlines(keepends=True)
+        sites: list[tuple[int, str, str, str, str]] = []
+
+        normal_idx = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("# Auto-TTS: if voice message"):
+                normal_idx = i
+                break
+        if normal_idx is None:
+            raise PatcherError("Cannot find slash delivery anchor")
+        sites.append(
+            (
+                normal_idx,
+                _safe_indent(lines, normal_idx),
+                "normal",
+                MK_SLASH_DELIVER,
+                MK_SLASH_DELIVER_END,
+            )
+        )
+
+        direct_sites = _unwrap_ephemeral_sites(
+            tree,
+            lines,
+            "_dispatch_active_session_command",
+        )
+        direct_idx, direct_indent = direct_sites[0]
+        sites.append(
+            (
+                direct_idx,
+                direct_indent,
+                "direct",
+                MK_SLASH_DIRECT,
+                MK_SLASH_DIRECT_END,
+            )
+        )
+
+        bypass_sites = _unwrap_ephemeral_sites(tree, lines, "handle_message")
+        if len(bypass_sites) > _MAX_SLASH_BYPASS_HOOKS:
+            raise PatcherError("Too many handle_message slash bypass sites")
+        for number, (idx, indent) in enumerate(bypass_sites):
+            begin, end = _slash_bypass_markers(number)
+            sites.append((idx, indent, "direct", begin, end))
+
+        for idx, indent, kind, begin, end in sorted(sites, reverse=True):
+            hook = (
+                _slash_deliver_hook(indent)
+                if kind == "normal"
+                else _slash_direct_deliver_hook(indent, begin=begin, end=end)
+            )
+            lines[idx:idx] = hook.splitlines(keepends=True)
+        _atomic_write(self.base_path, "".join(lines))
+
+    def remove(self) -> None:
+        content = self.base_path.read_text(encoding="utf-8")
+        for begin, end in self._all_marker_pairs():
+            content = _remove_block(content, begin, end)
+        _atomic_write(self.base_path, content)
+
+    def restore(self) -> None:
+        backup = self.base_path.with_suffix(self.base_path.suffix + _BACKUP_SUFFIX)
+        if not backup.exists():
+            raise PatcherError(f"No backup found: {backup}")
+        shutil.copy2(backup, self.base_path)
+
+    def _backup(self) -> None:
+        backup = self.base_path.with_suffix(self.base_path.suffix + _BACKUP_SUFFIX)
+        if not backup.exists():
+            shutil.copy2(self.base_path, backup)
+
+
+class FeishuAdapterPatcher:
+    """Route known lifecycle notices to CardKit at Feishu's text boundary."""
+
+    def __init__(self, adapter_path: Path | None = None) -> None:
+        self.adapter_path = adapter_path or _default_feishu_adapter_path()
+        if not self.adapter_path.exists():
+            tried = ", ".join(str(r) for r in _code_roots())
+            raise PatcherError(
+                f"plugins/platforms/feishu/adapter.py not found: {self.adapter_path} "
+                f"(tried: {tried}). "
+                f"Set HERMES_HOME to the dir containing hermes-agent/ and rerun."
+            )
+
+    def is_patched(self) -> bool:
+        return MK_FEISHU_NOTICE in self.adapter_path.read_text(encoding="utf-8")
+
+    def verify_target(self) -> None:
+        content = self.adapter_path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
+                args = {arg.arg for arg in node.args.args}
+                if {"chat_id", "content", "reply_to"}.issubset(args):
+                    return
+        raise PatcherError(
+            "Cannot find FeishuAdapter.send in adapter.py — Hermes version may be incompatible"
+        )
+
+    def apply(self) -> None:
+        if self.is_patched():
+            return
+        self.verify_target()
+        self._backup()
+        content = self.adapter_path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+        lines = content.splitlines(keepends=True)
+        site = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
+                args = {arg.arg for arg in node.args.args}
+                if {"chat_id", "content", "reply_to"}.issubset(args):
+                    body = node.body
+                    offset = 1 if (
+                        body
+                        and isinstance(body[0], ast.Expr)
+                        and isinstance(body[0].value, ast.Constant)
+                        and isinstance(body[0].value.value, str)
+                    ) else 0
+                    if offset < len(body):
+                        site = body[offset].lineno - 1
+                    break
+        if site is None:
+            raise PatcherError("Cannot locate FeishuAdapter.send body")
+        indent = _safe_indent(lines, site)
+        lines[site:site] = _feishu_notice_hook(indent).splitlines(keepends=True)
+        _atomic_write(self.adapter_path, "".join(lines))
+
+    def remove(self) -> None:
+        content = self.adapter_path.read_text(encoding="utf-8")
+        content = _remove_block(content, MK_FEISHU_NOTICE, MK_FEISHU_NOTICE_END)
+        _atomic_write(self.adapter_path, content)
+
+    def restore(self) -> None:
+        backup = self.adapter_path.with_suffix(
+            self.adapter_path.suffix + _BACKUP_SUFFIX
+        )
+        if not backup.exists():
+            raise PatcherError(f"No backup found: {backup}")
+        shutil.copy2(backup, self.adapter_path)
+
+    def _backup(self) -> None:
+        backup = self.adapter_path.with_suffix(
+            self.adapter_path.suffix + _BACKUP_SUFFIX
+        )
+        if not backup.exists():
+            shutil.copy2(self.adapter_path, backup)
