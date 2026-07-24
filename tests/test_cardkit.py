@@ -71,6 +71,30 @@ class TestOptimizeMarkdownStyle:
         assert "#### Title" in result
         assert "# Code heading" in result
 
+    def test_moves_chinese_label_colon_outside_bold_span(self) -> None:
+        text = "- **子智能体一\uFF1A**你好!我是子智能体一。"
+        assert optimize_markdown_style(text) == "- **子智能体一**\uFF1A你好!我是子智能体一。"
+
+    def test_moves_ascii_label_colon_outside_bold_span(self) -> None:
+        text = "- **Agent 1:**Hello"
+        assert optimize_markdown_style(text) == "- **Agent 1**:Hello"
+
+    def test_separates_adjacent_bold_and_word_content(self) -> None:
+        text = "**重点**下一句"
+        assert optimize_markdown_style(text) == "**重点** 下一句"
+
+    def test_valid_bold_spacing_is_unchanged(self) -> None:
+        text = "**粗体** 后续文本"
+        assert optimize_markdown_style(text) == text
+
+    def test_inline_code_is_not_normalized(self) -> None:
+        text = "示例\uFF1A`**标签\uFF1A**正文`"
+        assert optimize_markdown_style(text) == text
+
+    def test_fenced_code_is_not_normalized(self) -> None:
+        text = "```\n**标签\uFF1A**正文\n```"
+        assert optimize_markdown_style(text) == text
+
 
 class TestStripInvalidImageKeys:
     def test_no_images_unchanged(self) -> None:
