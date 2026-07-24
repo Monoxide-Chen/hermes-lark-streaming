@@ -9,6 +9,7 @@ _logger = logging.getLogger("hermes_lark_streaming")
 
 _MAX_CARD_TABLES = 5
 _MAX_CHUNK_CHARS = 2400
+_INLINE_CODE_RE = re.compile(r"(?P<fence>`+)(?P<body>[\s\S]*?)(?P=fence)")
 
 __all__ = [
     "_downgrade_tables",
@@ -58,14 +59,41 @@ def _strip_invalid_image_keys(text: str) -> str:
     return re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", _replace, text)
 
 
+def _normalize_strong_emphasis_boundaries(text: str) -> str:
+    """Make adjacent strong-emphasis labels unambiguous to CommonMark parsers."""
+
+    def _normalize_plain(segment: str) -> str:
+        # `**Label：**text` is ambiguous because the closing delimiter sits
+        # between punctuation and a word character. Keep the punctuation
+        # visible but move it outside the strong span.
+        segment = re.sub(
+            r"(?<!\\)\*\*([^*\n]+?)([\uFF1A:])\*\*(?=\S)",
+            r"**\1**\2",
+            segment,
+        )
+        # `**bold**text` is ambiguous for the same reason. A separator makes
+        # the closing delimiter right-flanking without changing the content.
+        return re.sub(r"(?<!\\)(\*\*[^*\n]+?\*\*)(?=\w)", r"\1 ", segment)
+
+    parts: list[str] = []
+    cursor = 0
+    for match in _INLINE_CODE_RE.finditer(text):
+        parts.append(_normalize_plain(text[cursor : match.start()]))
+        parts.append(match.group(0))
+        cursor = match.end()
+    parts.append(_normalize_plain(text[cursor:]))
+    return "".join(parts)
+
+
 def optimize_markdown_style(text: str) -> str:
     """优化流式 Markdown 以适配飞书 CardKit 渲染.
 
     1. 提取代码块用占位符保护
     2. 标题降级: H1 -> H4, H2-H6 -> H5
-    3. 还原代码块
-    4. 压缩多余空行
-    5. 剥离无效图片 key（非 img_xxx 格式）
+    3. 修正加粗标记与后续文本紧邻时的 CommonMark 边界
+    4. 还原代码块
+    5. 压缩多余空行
+    6. 剥离无效图片 key（非 img_xxx 格式）
     """
     try:
         # 1. 提取代码块
@@ -86,14 +114,17 @@ def optimize_markdown_style(text: str) -> str:
             r = re.sub(r"^#{2,6} (.+)$", r"##### \1", r, flags=re.MULTILINE)
             r = re.sub(r"^# (.+)$", r"#### \1", r, flags=re.MULTILINE)
 
-        # 3. 还原代码块
+        # 3. 修正强调标记边界（代码块仍由占位符保护）
+        r = _normalize_strong_emphasis_boundaries(r)
+
+        # 4. 还原代码块
         for i, block in enumerate(code_blocks):
             r = r.replace(f"{mark}{i}___", block)
 
-        # 4. 压缩多余空行
+        # 5. 压缩多余空行
         r = re.sub(r"\n{3,}", "\n\n", r)
 
-        # 5. 剥离无效图片 key
+        # 6. 剥离无效图片 key
         r = _strip_invalid_image_keys(r)
 
         return r
