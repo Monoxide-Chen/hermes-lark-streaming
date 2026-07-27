@@ -205,6 +205,10 @@ MK_SLASH_DIRECT = f"# {PREFIX}_SLASH_DIRECT_BEGIN"
 MK_SLASH_DIRECT_END = f"# {PREFIX}_SLASH_DIRECT_END"
 MK_FEISHU_NOTICE = f"# {PREFIX}_FEISHU_NOTICE_BEGIN"
 MK_FEISHU_NOTICE_END = f"# {PREFIX}_FEISHU_NOTICE_END"
+MK_FEISHU_CLARIFY_METHOD = f"# {PREFIX}_FEISHU_CLARIFY_METHOD_BEGIN"
+MK_FEISHU_CLARIFY_METHOD_END = f"# {PREFIX}_FEISHU_CLARIFY_METHOD_END"
+MK_FEISHU_CLARIFY_ACTION = f"# {PREFIX}_FEISHU_CLARIFY_ACTION_BEGIN"
+MK_FEISHU_CLARIFY_ACTION_END = f"# {PREFIX}_FEISHU_CLARIFY_ACTION_END"
 _MAX_SLASH_BYPASS_HOOKS = 8
 
 
@@ -699,6 +703,63 @@ def _feishu_notice_hook(indent: str) -> str:
             "    )",
             "    if _lark_notice_msg_id:",
             "        return SendResult(success=True, message_id=_lark_notice_msg_id)",
+            "except Exception:",
+            "    pass",
+        ],
+    )
+
+
+def _feishu_clarify_method_hook(indent: str) -> str:
+    """Add a Feishu-native clarify delivery override to the adapter class."""
+    return _make_hook(
+        indent,
+        MK_FEISHU_CLARIFY_METHOD,
+        MK_FEISHU_CLARIFY_METHOD_END,
+        [
+            "async def send_clarify(",
+            "    self, chat_id, question, choices, clarify_id, session_key, metadata=None,",
+            "):",
+            "    try:",
+            "        from hermes_lark_streaming.patch import on_feishu_clarify_request",
+            "        if await on_feishu_clarify_request(",
+            "            chat_id=chat_id,",
+            "            question=question,",
+            "            choices=list(choices) if choices else None,",
+            "            clarify_id=clarify_id,",
+            "            session_key=session_key,",
+            "        ):",
+            "            return SendResult(success=True)",
+            "    except Exception:",
+            "        pass",
+            "    return await super().send_clarify(",
+            "        chat_id=chat_id,",
+            "        question=question,",
+            "        choices=choices,",
+            "        clarify_id=clarify_id,",
+            "        session_key=session_key,",
+            "        metadata=metadata,",
+            "    )",
+        ],
+    )
+
+
+def _feishu_clarify_action_hook(indent: str) -> str:
+    """Claim clarify callbacks before Feishu routes them as synthetic commands."""
+    return _make_hook(
+        indent,
+        MK_FEISHU_CLARIFY_ACTION,
+        MK_FEISHU_CLARIFY_ACTION_END,
+        [
+            "try:",
+            "    from hermes_lark_streaming.patch import on_feishu_clarify_action",
+            "    if on_feishu_clarify_action(",
+            "        adapter=self,",
+            "        event=event,",
+            "        action=action,",
+            "        action_value=action_value,",
+            "        loop=loop,",
+            "    ):",
+            "        return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None",
             "except Exception:",
             "    pass",
         ],
@@ -1312,7 +1373,7 @@ class BasePatcher:
 
 
 class FeishuAdapterPatcher:
-    """Route known lifecycle notices to CardKit at Feishu's text boundary."""
+    """Route Feishu lifecycle notices and clarify interactions through CardKit."""
 
     def __init__(self, adapter_path: Path | None = None) -> None:
         self.adapter_path = adapter_path or _default_feishu_adapter_path()
@@ -1324,30 +1385,74 @@ class FeishuAdapterPatcher:
                 f"Set HERMES_HOME to the dir containing hermes-agent/ and rerun."
             )
 
+    @staticmethod
+    def _marker_pairs() -> list[tuple[str, str]]:
+        return [
+            (MK_FEISHU_NOTICE, MK_FEISHU_NOTICE_END),
+            (MK_FEISHU_CLARIFY_METHOD, MK_FEISHU_CLARIFY_METHOD_END),
+            (MK_FEISHU_CLARIFY_ACTION, MK_FEISHU_CLARIFY_ACTION_END),
+        ]
+
     def is_patched(self) -> bool:
-        return MK_FEISHU_NOTICE in self.adapter_path.read_text(encoding="utf-8")
+        content = self.adapter_path.read_text(encoding="utf-8")
+        return any(begin in content for begin, _ in self._marker_pairs())
+
+    def is_fully_patched(self) -> bool:
+        content = self.adapter_path.read_text(encoding="utf-8")
+        return all(begin in content and end in content for begin, end in self._marker_pairs())
 
     def verify_target(self) -> None:
         content = self.adapter_path.read_text(encoding="utf-8")
         tree = ast.parse(content)
+        found_send = False
+        found_method_anchor = False
+        found_action_anchor = False
         for node in ast.walk(tree):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
                 args = {arg.arg for arg in node.args.args}
                 if {"chat_id", "content", "reply_to"}.issubset(args):
-                    return
-        raise PatcherError(
-            "Cannot find FeishuAdapter.send in adapter.py — Hermes version may be incompatible"
-        )
+                    found_send = True
+            elif isinstance(node, ast.AsyncFunctionDef) and node.name == "send_exec_approval":
+                found_method_anchor = True
+            elif isinstance(node, ast.FunctionDef) and node.name == "_on_card_action_trigger":
+                for stmt in ast.walk(node):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    if any(
+                        isinstance(target, ast.Name) and target.id == "action_value"
+                        for target in stmt.targets
+                    ):
+                        found_action_anchor = True
+                        break
+        missing = []
+        if not found_send:
+            missing.append("FeishuAdapter.send")
+        if not found_method_anchor:
+            missing.append("FeishuAdapter.send_exec_approval")
+        if not found_action_anchor:
+            missing.append("FeishuAdapter._on_card_action_trigger action_value")
+        if missing:
+            raise PatcherError(
+                "Cannot find Feishu adapter target(s): "
+                + ", ".join(missing)
+                + " — Hermes version may be incompatible"
+            )
 
     def apply(self) -> None:
-        if self.is_patched():
+        if self.is_fully_patched():
             return
         self.verify_target()
-        self._backup()
         content = self.adapter_path.read_text(encoding="utf-8")
+        if self.is_patched():
+            for begin, end in self._marker_pairs():
+                content = _remove_block(content, begin, end)
+        else:
+            self._backup()
         tree = ast.parse(content)
         lines = content.splitlines(keepends=True)
-        site = None
+        notice_site = None
+        method_site = None
+        action_site = None
         for node in ast.walk(tree):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
                 args = {arg.arg for arg in node.args.args}
@@ -1360,17 +1465,34 @@ class FeishuAdapterPatcher:
                         and isinstance(body[0].value.value, str)
                     ) else 0
                     if offset < len(body):
-                        site = body[offset].lineno - 1
-                    break
-        if site is None:
-            raise PatcherError("Cannot locate FeishuAdapter.send body")
-        indent = _safe_indent(lines, site)
-        lines[site:site] = _feishu_notice_hook(indent).splitlines(keepends=True)
+                        notice_site = body[offset].lineno - 1
+            elif isinstance(node, ast.AsyncFunctionDef) and node.name == "send_exec_approval":
+                method_site = node.lineno - 1
+            elif isinstance(node, ast.FunctionDef) and node.name == "_on_card_action_trigger":
+                for stmt in ast.walk(node):
+                    if not isinstance(stmt, ast.Assign):
+                        continue
+                    if any(
+                        isinstance(target, ast.Name) and target.id == "action_value"
+                        for target in stmt.targets
+                    ):
+                        action_site = stmt.end_lineno or stmt.lineno
+                        break
+        if notice_site is None or method_site is None or action_site is None:
+            raise PatcherError("Cannot locate all Feishu adapter injection sites")
+        sites = [
+            (notice_site, _feishu_notice_hook(_safe_indent(lines, notice_site))),
+            (method_site, _feishu_clarify_method_hook(_safe_indent(lines, method_site))),
+            (action_site, _feishu_clarify_action_hook(_safe_indent(lines, action_site - 1))),
+        ]
+        for site, hook in sorted(sites, key=lambda item: item[0], reverse=True):
+            lines[site:site] = hook.splitlines(keepends=True)
         _atomic_write(self.adapter_path, "".join(lines))
 
     def remove(self) -> None:
         content = self.adapter_path.read_text(encoding="utf-8")
-        content = _remove_block(content, MK_FEISHU_NOTICE, MK_FEISHU_NOTICE_END)
+        for begin, end in self._marker_pairs():
+            content = _remove_block(content, begin, end)
         _atomic_write(self.adapter_path, content)
 
     def restore(self) -> None:

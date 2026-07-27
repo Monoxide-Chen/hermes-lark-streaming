@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import inspect
 import logging
 import threading
 import time
 from collections.abc import Callable, Coroutine
 from concurrent.futures import Future as ConcurrentFuture
+from types import SimpleNamespace
 from typing import Any
 
+from .clarify import (
+    ClarifyState,
+    ClarifySubmission,
+    build_clarify_add_action,
+    build_clarify_resolved_actions,
+    parse_clarify_submission,
+)
 from .config import Config
 from .feishu import (
     FeishuClient,
@@ -39,6 +48,8 @@ class StreamCardController(StreamingController):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._text_fallback_needed: set[str] = set()
         self._text_fallback_aliases: dict[str, set[str]] = {}
+        self._clarify_sessions: dict[str, CardSession] = {}
+        self._clarify_lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -240,6 +251,232 @@ class StreamCardController(StreamingController):
         _logger.info("on_aborted: msg=%s state=ABORTED", message_id[:12])
 
         self._complete_session(session)
+
+    async def on_clarify_request(
+        self,
+        *,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None,
+        clarify_id: str,
+        session_key: str,
+    ) -> bool:
+        """Attach a Hermes clarify prompt to the active streaming card."""
+        if not self.enabled:
+            return False
+        session = self._active_session_for_chat(chat_id)
+        if session is None:
+            return False
+        if not await self._wait_for_card_creation(session):
+            return False
+        if session.state.is_terminal or not session.card_id or self._client is None:
+            return False
+
+        state = ClarifyState(
+            clarify_id=clarify_id,
+            session_key=session_key,
+            question=str(question),
+            choices=[str(choice) for choice in choices or []],
+        )
+        if session.clarify_state is not None:
+            _logger.warning(
+                "clarify request ignored because card already has a pending prompt: msg=%s existing=%s new=%s",
+                session.message_id[:12],
+                session.clarify_state.clarify_id,
+                clarify_id,
+            )
+            return False
+
+        await session.flush.wait_for_flush()
+        session.sequence += 1
+        try:
+            await self._client.cardkit_batch_update(
+                session.card_id,
+                [build_clarify_add_action(state)],
+                sequence=session.sequence,
+            )
+        except Exception:
+            _logger.warning(
+                "failed to attach clarify prompt to CardKit card: msg=%s clarify=%s",
+                session.message_id[:12],
+                clarify_id,
+                exc_info=True,
+            )
+            return False
+
+        session.clarify_state = state
+        with self._clarify_lock:
+            self._clarify_sessions[clarify_id] = session
+        session.element_count += len(state.interactive_element_ids) + 1
+        _logger.info(
+            "clarify prompt attached: msg=%s chat=%s clarify=%s choices=%d",
+            session.message_id[:12],
+            chat_id[:12],
+            clarify_id,
+            len(state.choices),
+        )
+        return True
+
+    def on_clarify_action(
+        self,
+        *,
+        adapter: Any,
+        event: Any,
+        action: Any,
+        action_value: Any,
+        loop: asyncio.AbstractEventLoop,
+    ) -> bool:
+        """Claim a clarify CardKit callback and schedule resolution on the adapter loop."""
+        submission = parse_clarify_submission(action, action_value)
+        if submission is None:
+            return False
+
+        with self._clarify_lock:
+            session = self._clarify_sessions.get(submission.clarify_id)
+            state = session.clarify_state if session is not None else None
+            if session is None or state is None:
+                _logger.info("stale clarify card action ignored: clarify=%s", submission.clarify_id)
+                return True
+            if state.resolving:
+                return True
+
+            response = self._clarify_response(state, submission)
+            if not response:
+                _logger.info("empty or invalid clarify response ignored: clarify=%s", submission.clarify_id)
+                return True
+            state.resolving = True
+
+        context = getattr(event, "context", None)
+        callback_chat_id = str(getattr(context, "open_chat_id", "") or "")
+        if callback_chat_id and callback_chat_id != session.chat_id:
+            state.resolving = False
+            _logger.warning(
+                "clarify callback chat mismatch: clarify=%s expected=%s got=%s",
+                state.clarify_id,
+                session.chat_id,
+                callback_chat_id,
+            )
+            return True
+
+        operator = getattr(event, "operator", None)
+        open_id = str(getattr(operator, "open_id", "") or "")
+        user_id = str(getattr(operator, "user_id", "") or "")
+        sender_id = SimpleNamespace(open_id=open_id, user_id=user_id, union_id=None)
+        allow_group_message = getattr(adapter, "_allow_group_message", None)
+        if callable(allow_group_message) and not allow_group_message(
+            sender_id,
+            session.chat_id,
+            is_bot=False,
+        ):
+            state.resolving = False
+            _logger.warning(
+                "unauthorized clarify card action ignored: clarify=%s open_id=%s user_id=%s",
+                state.clarify_id,
+                open_id or "<unknown>",
+                user_id or "<unknown>",
+            )
+            return True
+
+        resolver = self._resolve_clarify_action(
+            adapter=adapter,
+            session=session,
+            state=state,
+            response=response,
+            open_id=open_id,
+            user_id=user_id,
+        )
+        submit = getattr(adapter, "_submit_on_loop", None)
+        if not callable(submit) or not submit(loop, resolver):
+            resolver.close()
+            state.resolving = False
+            _logger.warning("failed to schedule clarify card action: clarify=%s", state.clarify_id)
+        return True
+
+    @staticmethod
+    def _clarify_response(state: ClarifyState, submission: ClarifySubmission) -> str:
+        if submission.choice_index is not None:
+            if 0 <= submission.choice_index < len(state.choices):
+                return state.choices[submission.choice_index].strip()
+            return ""
+        return submission.text.strip()
+
+    async def _resolve_clarify_action(
+        self,
+        *,
+        adapter: Any,
+        session: CardSession,
+        state: ClarifyState,
+        response: str,
+        open_id: str,
+        user_id: str,
+    ) -> None:
+        actor_name = ""
+        resolve_profile = getattr(adapter, "_resolve_sender_profile", None)
+        if callable(resolve_profile):
+            try:
+                profile = await resolve_profile(
+                    SimpleNamespace(open_id=open_id, user_id=user_id, union_id=None)
+                )
+                if isinstance(profile, dict):
+                    actor_name = str(profile.get("user_name") or "")
+            except Exception:
+                _logger.debug("failed to resolve clarify actor profile", exc_info=True)
+        if not actor_name:
+            get_cached_name = getattr(adapter, "_get_cached_sender_name", None)
+            if callable(get_cached_name):
+                actor_name = str(get_cached_name(open_id) or "")
+        actor_name = actor_name or open_id or user_id or "未知用户"
+
+        card_updated = False
+        if self._client is not None and session.card_id and not session.state.is_terminal:
+            try:
+                await session.flush.wait_for_flush()
+                session.sequence += 1
+                await self._client.cardkit_batch_update(
+                    session.card_id,
+                    build_clarify_resolved_actions(
+                        state,
+                        response=response,
+                        actor_name=actor_name,
+                    ),
+                    sequence=session.sequence,
+                )
+                session.element_count -= len(state.interactive_element_ids)
+                card_updated = True
+            except Exception:
+                _logger.warning(
+                    "failed to collapse clarify controls: msg=%s clarify=%s",
+                    session.message_id[:12],
+                    state.clarify_id,
+                    exc_info=True,
+                )
+
+        resolved = False
+        try:
+            clarify_gateway = importlib.import_module("tools.clarify_gateway")
+            resolve_gateway_clarify = clarify_gateway.resolve_gateway_clarify
+            resolved = bool(resolve_gateway_clarify(state.clarify_id, response))
+        except Exception:
+            _logger.exception("failed to resolve Hermes clarify: clarify=%s", state.clarify_id)
+        finally:
+            with self._clarify_lock:
+                if self._clarify_sessions.get(state.clarify_id) is session:
+                    self._clarify_sessions.pop(state.clarify_id, None)
+            if session.clarify_state is state:
+                session.clarify_state = None
+
+        _logger.info(
+            "clarify action processed: msg=%s clarify=%s resolved=%s card_updated=%s "
+            "actor_name=%s open_id=%s user_id=%s response_len=%d",
+            session.message_id[:12],
+            state.clarify_id,
+            resolved,
+            card_updated,
+            actor_name,
+            open_id or "<unknown>",
+            user_id or "<unknown>",
+            len(response),
+        )
 
     def on_interrupted(
         self,
@@ -463,6 +700,12 @@ class StreamCardController(StreamingController):
         session = self._sessions.pop(message_id, None)
         if session is None:
             return
+        clarify_state = getattr(session, "clarify_state", None)
+        if clarify_state is not None:
+            with self._clarify_lock:
+                if self._clarify_sessions.get(clarify_state.clarify_id) is session:
+                    self._clarify_sessions.pop(clarify_state.clarify_id, None)
+            session.clarify_state = None
         anchor = getattr(session, "anchor_id", None)
         if anchor and self._sessions.get(anchor) is session:
             del self._sessions[anchor]
@@ -472,6 +715,17 @@ class StreamCardController(StreamingController):
         session.flush.mark_completed()
         if session.image_resolver:
             session.image_resolver.cancel_pending()
+
+    def _active_session_for_chat(self, chat_id: str) -> CardSession | None:
+        """Return the newest unique active card session for a serialized Feishu chat."""
+        unique: dict[int, CardSession] = {}
+        for session in self._sessions.values():
+            if session.chat_id == chat_id and not session.state.is_terminal:
+                unique[id(session)] = session
+        candidates = [session for session in unique.values() if session.has_card or session.create_task]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.created_at)
 
     def _completion_session(self, message_id: str) -> CardSession | None:
         session = self._sessions.get(message_id)
