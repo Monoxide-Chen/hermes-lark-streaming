@@ -94,6 +94,14 @@ def _base_patcher_status(patcher: BasePatcher) -> str:
     return "not installed"
 
 
+def _feishu_patcher_status(patcher: FeishuAdapterPatcher) -> str:
+    if patcher.is_fully_patched():
+        return "installed"
+    if patcher.is_patched():
+        return "partial (rerun install)"
+    return "not installed"
+
+
 def _cmd_install() -> int:
     patcher = _get_patcher()
     if patcher is None:
@@ -129,7 +137,7 @@ def _cmd_install() -> int:
 
     for label, optional_patcher in (
         ("Slash command", _get_base_patcher()),
-        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+        ("Feishu adapter", _get_feishu_adapter_patcher()),
     ):
         if optional_patcher is None:
             continue
@@ -149,7 +157,7 @@ def _cmd_uninstall() -> int:
         return 1
 
     for label, optional_patcher in (
-        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+        ("Feishu adapter", _get_feishu_adapter_patcher()),
         ("Slash command", _get_base_patcher()),
         ("Cron", _get_cron_patcher()),
     ):
@@ -183,7 +191,7 @@ def _cmd_restore() -> int:
     for label, optional_patcher in (
         ("Cron", _get_cron_patcher()),
         ("Slash command", _get_base_patcher()),
-        ("Feishu lifecycle notice", _get_feishu_adapter_patcher()),
+        ("Feishu adapter", _get_feishu_adapter_patcher()),
     ):
         if optional_patcher is None:
             continue
@@ -229,7 +237,7 @@ def _cmd_status() -> int:
         print(f"Slash command hook: {_base_patcher_status(base_patcher)}")
     feishu_patcher = _get_feishu_adapter_patcher()
     if feishu_patcher is not None:
-        print(f"Feishu lifecycle notice hook: {'installed' if feishu_patcher.is_patched() else 'not installed'}")
+        print(f"Feishu adapter hook: {_feishu_patcher_status(feishu_patcher)}")
 
     # Check config
     from .config import Config
@@ -281,7 +289,7 @@ def _cmd_verify() -> int:
 
     for label, optional_patcher, path_attr in (
         ("Slash command", _get_base_patcher(), "base_path"),
-        ("Feishu lifecycle notice", _get_feishu_adapter_patcher(), "adapter_path"),
+        ("Feishu adapter", _get_feishu_adapter_patcher(), "adapter_path"),
     ):
         if optional_patcher is None:
             continue

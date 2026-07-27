@@ -20,6 +20,8 @@ from hermes_lark_streaming.patcher import (
     MARKERS,
     MK_CRON_DELIVER,
     MK_CRON_DELIVER_END,
+    MK_FEISHU_CLARIFY_ACTION,
+    MK_FEISHU_CLARIFY_METHOD,
     MK_FEISHU_NOTICE,
     MK_SLASH_DELIVER,
     MK_SLASH_DIRECT,
@@ -157,6 +159,17 @@ def feishu_adapter_copy(tmp_path: Path) -> Path:
                     if not self._client:
                         return SendResult(success=False)
                     return SendResult(success=True)
+
+                async def send_exec_approval(self, chat_id, command, session_key):
+                    return SendResult(success=True)
+
+                def _on_card_action_trigger(self, data):
+                    loop = self._loop
+                    event = data.event
+                    action = event.action
+                    action_value = action.value or {}
+                    self._handle_card_action_event(data)
+                    return P2CardActionTriggerResponse()
             '''
         ),
         encoding="utf-8",
@@ -609,7 +622,11 @@ class TestFeishuAdapterPatcher:
         content = feishu_adapter_copy.read_text(encoding="utf-8")
 
         assert MK_FEISHU_NOTICE in content
+        assert MK_FEISHU_CLARIFY_METHOD in content
+        assert MK_FEISHU_CLARIFY_ACTION in content
         assert "on_feishu_notification_deliver" in content
+        assert "on_feishu_clarify_request" in content
+        assert "on_feishu_clarify_action" in content
         assert "_lark_notice_msg_id" in content
         ast.parse(content)
 
@@ -621,6 +638,35 @@ class TestFeishuAdapterPatcher:
         patcher.remove()
 
         assert feishu_adapter_copy.read_text(encoding="utf-8") == original
+
+    def test_upgrades_notice_only_hook(self, feishu_adapter_copy: Path) -> None:
+        from hermes_lark_streaming.__main__ import _feishu_patcher_status
+
+        patcher = FeishuAdapterPatcher(adapter_path=feishu_adapter_copy)
+        original = feishu_adapter_copy.read_text(encoding="utf-8")
+        anchor = "        if not self._client:\n"
+        legacy = original.replace(
+            anchor,
+            (
+                "        # HERMES_LARK_FEISHU_NOTICE_BEGIN\n"
+                "        legacy_notice = True\n"
+                "        # HERMES_LARK_FEISHU_NOTICE_END\n"
+                + anchor
+            ),
+            1,
+        )
+        feishu_adapter_copy.write_text(legacy, encoding="utf-8")
+
+        assert patcher.is_patched()
+        assert not patcher.is_fully_patched()
+        assert _feishu_patcher_status(patcher) == "partial (rerun install)"
+
+        patcher.apply()
+        upgraded = feishu_adapter_copy.read_text(encoding="utf-8")
+
+        assert "legacy_notice" not in upgraded
+        assert patcher.is_fully_patched()
+        assert _feishu_patcher_status(patcher) == "installed"
 
 
 class TestStaticDeliveryHooks:
