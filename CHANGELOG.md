@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 飞书斜杠命令的即时结果统一为 CardKit 完成态卡片；skill/bundle 等进入 agent loop 的命令继续使用真实流式卡片。
 - gateway 生命周期通知与 self-improvement/background review 通知使用 CardKit 完成态卡片，失败时回退 Hermes 原始文本发送。
+- Hermes `clarify` / ask-user 请求直接附加到当前流式卡片，支持选项和自由输入；提交后原地收起控件，并记录群聊回答者的姓名与用户 ID。
 
 ### 修复
 
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Immediate Feishu slash-command results now use completed CardKit cards, while skill/bundle commands that enter the agent loop keep real streaming cards.
 - Gateway lifecycle and deferred self-improvement/background-review notices now use completed CardKit cards, with fallback to Hermes text delivery.
+- Hermes `clarify` / ask-user prompts now attach to the active streaming card with choice and free-text controls, collapse in place after submission, and audit the responding group member.
 
 ### Fixed
 

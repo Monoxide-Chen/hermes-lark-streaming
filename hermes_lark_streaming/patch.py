@@ -206,6 +206,60 @@ def on_feishu_normalize(
         _logger.warning("on_feishu_normalize error: %s", exc, exc_info=True)
 
 
+async def on_feishu_clarify_request(
+    *,
+    chat_id: str,
+    question: str,
+    choices: list[str] | None,
+    clarify_id: str,
+    session_key: str,
+) -> bool:
+    """Attach Feishu clarify controls to the current streaming card."""
+    try:
+        ctrl = get_controller()
+        if not ctrl.enabled:
+            return False
+        return bool(
+            await ctrl.on_clarify_request(
+                chat_id=chat_id,
+                question=question,
+                choices=choices,
+                clarify_id=clarify_id,
+                session_key=session_key,
+            )
+        )
+    except Exception as exc:
+        _logger.warning("on_feishu_clarify_request error: %s", exc, exc_info=True)
+        return False
+
+
+def on_feishu_clarify_action(
+    *,
+    adapter: Any,
+    event: Any,
+    action: Any,
+    action_value: Any,
+    loop: Any,
+) -> bool:
+    """Claim and resolve a Feishu clarify card callback."""
+    try:
+        ctrl = get_controller()
+        if not ctrl.enabled:
+            return False
+        return bool(
+            ctrl.on_clarify_action(
+                adapter=adapter,
+                event=event,
+                action=action,
+                action_value=action_value,
+                loop=loop,
+            )
+        )
+    except Exception as exc:
+        _logger.warning("on_feishu_clarify_action error: %s", exc, exc_info=True)
+        return False
+
+
 @_safe_hook()
 def on_message_started(*, ctrl: Any, message_id: str, chat_id: str, anchor_id: str | None = None) -> None:
     """[注入点 1] 函数开头 — message.started."""

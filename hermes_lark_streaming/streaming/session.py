@@ -16,6 +16,7 @@ from .tooluse import ToolUseTracker
 from .unavailable_guard import UnavailableGuard
 
 if TYPE_CHECKING:
+    from ..clarify import ClarifyState
     from .image import ImageResolver
 
 
@@ -45,6 +46,7 @@ class CardSession:
         "card_id",
         "card_msg_id",
         "chat_id",
+        "clarify_state",
         "create_task",
         "created_at",
         "deferred_background_review_closed",
@@ -73,6 +75,7 @@ class CardSession:
         self.message_id = message_id
         self.anchor_id: str | None = None
         self.chat_id = chat_id
+        self.clarify_state: ClarifyState | None = None
         self.create_task: asyncio.Future[Any] | ConcurrentFuture | None = None
         self.state = SessionState.IDLE
         self.card_msg_id: str | None = None
