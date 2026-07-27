@@ -620,6 +620,7 @@ class StreamingController:
         card = build_complete_card(
             segments=active_segments,
             all_tool_steps=all_tool_steps,
+            clarify_results=session.clarify_results,
             footer_data=session.footer,
             is_error=is_error,
             is_aborted=is_aborted,
