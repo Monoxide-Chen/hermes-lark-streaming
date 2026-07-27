@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from ..streaming.segments import Segment, SegmentType
+from ..streaming.session import ClarifyResult
 from ..streaming.tooluse import ToolDisplayStep
 from .i18n import _LOCALES, _T, _i18n, _t
 from .markdown import (
@@ -21,6 +22,11 @@ REASONING_TEXT_ELEMENT_ID = "reasoning_text"
 TOOL_PANEL_ELEMENT_ID = "tool_panel"
 _LOADING_ELEMENT_ID = "loading_icon"
 _LOADING_IMG_KEY = "img_v3_02vb_496bec09-4b43-4773-ad6b-0cdd103cd2bg"
+
+
+def _escape_untrusted_markdown(value: str) -> str:
+    """Escape callback-provided text before placing it in card markdown."""
+    return re.sub(r"([\\`*_{}\[\]<>])", r"\\\1", str(value))
 
 
 def _collapsible_panel(
@@ -456,6 +462,7 @@ def build_complete_card(
     *,
     segments: list[Segment],
     all_tool_steps: list[ToolDisplayStep],
+    clarify_results: list[ClarifyResult] | None = None,
     footer_data: dict | None = None,
     is_error: bool = False,
     is_aborted: bool = False,
@@ -470,6 +477,21 @@ def build_complete_card(
     """完成态流式卡片 — 按 segments 顺序渲染."""
     elements: list[dict] = []
     has_answer = False
+    clarify_elements = [
+        {
+            "tag": "markdown",
+            "content": (
+                f"✅ **{_escape_untrusted_markdown(result.actor_name or '未知用户')} 已回答**: "
+                f"{_escape_untrusted_markdown(result.response)}\n\n"
+                "<font color='grey'>原问题: "
+                f"{_escape_untrusted_markdown(result.question)}</font>"
+            ),
+            "text_size": body_text_size,
+        }
+        for result in (clarify_results or [])
+    ]
+    clarifies_rendered = False
+    saw_tool = False
 
     for seg in segments:
         if seg.type == SegmentType.REASONING:
@@ -484,11 +506,18 @@ def build_complete_card(
             steps = all_tool_steps[start:end]
             if steps:
                 elements.append(_build_tool_panel(steps, expanded=panel_expanded, element_id=None))
+                saw_tool = True
         elif seg.type == SegmentType.ANSWER and seg.text:
+            if clarify_elements and saw_tool and not clarifies_rendered:
+                elements.extend(clarify_elements)
+                clarifies_rendered = True
             has_answer = True
             content = _downgrade_tables(optimize_markdown_style(seg.text))
             for chunk in _split_long_text(content):
                 elements.append({"tag": "markdown", "content": chunk, "text_size": body_text_size})
+
+    if clarify_elements and not clarifies_rendered:
+        elements.extend(clarify_elements)
 
     if not has_answer:
         elements.append({"tag": "markdown", "content": _T["done"][0], "text_size": body_text_size})

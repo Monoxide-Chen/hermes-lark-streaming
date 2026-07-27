@@ -191,6 +191,10 @@ async def test_group_choice_records_operator_and_resolves_hermes() -> None:
 
     assert resolved == [("abc123", "B")]
     assert session.clarify_state is None
+    assert len(session.clarify_results) == 1
+    assert session.clarify_results[0].question == "选哪个?"
+    assert session.clarify_results[0].response == "B"
+    assert session.clarify_results[0].actor_name == "Alice"
     assert "abc123" not in ctrl._clarify_sessions
     final_actions = ctrl._client.cardkit_batch_update.await_args_list[-1].args[1]
     assert "Alice 已回答" in final_actions[1]["params"]["element"]["content"]

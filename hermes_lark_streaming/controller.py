@@ -27,7 +27,7 @@ from .feishu import (
 )
 from .streaming.controller import StreamingController
 from .streaming.segments import SegmentType
-from .streaming.session import CardSession, SessionState
+from .streaming.session import CardSession, ClarifyResult, SessionState
 from .streaming.text import strip_reasoning_tags
 
 _logger = logging.getLogger("hermes_lark_streaming")
@@ -456,6 +456,14 @@ class StreamCardController(StreamingController):
             clarify_gateway = importlib.import_module("tools.clarify_gateway")
             resolve_gateway_clarify = clarify_gateway.resolve_gateway_clarify
             resolved = bool(resolve_gateway_clarify(state.clarify_id, response))
+            if resolved:
+                session.clarify_results.append(
+                    ClarifyResult(
+                        question=state.question,
+                        response=response,
+                        actor_name=actor_name,
+                    )
+                )
         except Exception:
             _logger.exception("failed to resolve Hermes clarify: clarify=%s", state.clarify_id)
         finally:
