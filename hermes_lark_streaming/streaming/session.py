@@ -6,6 +6,7 @@ import asyncio
 import time
 from collections.abc import Callable
 from concurrent.futures import Future as ConcurrentFuture
+from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Any
@@ -37,6 +38,15 @@ class SessionState(StrEnum):
         }
 
 
+@dataclass(frozen=True)
+class ClarifyResult:
+    """An answered clarify prompt retained for the completed card."""
+
+    question: str
+    response: str
+    actor_name: str
+
+
 class CardSession:
     """单条消息的卡片会话状态."""
 
@@ -46,6 +56,7 @@ class CardSession:
         "card_id",
         "card_msg_id",
         "chat_id",
+        "clarify_results",
         "clarify_state",
         "create_task",
         "created_at",
@@ -75,6 +86,7 @@ class CardSession:
         self.message_id = message_id
         self.anchor_id: str | None = None
         self.chat_id = chat_id
+        self.clarify_results: list[ClarifyResult] = []
         self.clarify_state: ClarifyState | None = None
         self.create_task: asyncio.Future[Any] | ConcurrentFuture | None = None
         self.state = SessionState.IDLE

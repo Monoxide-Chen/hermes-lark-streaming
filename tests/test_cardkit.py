@@ -27,6 +27,7 @@ from hermes_lark_streaming.cardkit.markdown import (
     optimize_markdown_style,
 )
 from hermes_lark_streaming.streaming.segments import Segment
+from hermes_lark_streaming.streaming.session import ClarifyResult
 
 # --- Markdown 优化 ---
 
@@ -449,6 +450,27 @@ class TestBuildSegmentCompleteCard:
         elements = card["body"]["elements"]
         assert any("hello world" in str(e) for e in elements)
         assert not any("Done" in str(e) for e in elements)
+
+    def test_clarify_result_survives_complete_card_rebuild(self) -> None:
+        card = build_complete_card(
+            segments=[_seg("tool", tool_offset=0, tool_end_offset=1), _seg("answer", "继续执行")],
+            all_tool_steps=[_STEP_SUCCESS],
+            clarify_results=[
+                ClarifyResult(
+                    question="是否继续?",
+                    response="继续",
+                    actor_name="Alice",
+                )
+            ],
+        )
+
+        contents = [str(element) for element in card["body"]["elements"]]
+        tool_index = next(i for i, content in enumerate(contents) if "collapsible_panel" in content)
+        result_index = next(i for i, content in enumerate(contents) if "Alice" in content)
+        answer_index = next(i for i, content in enumerate(contents) if "继续执行" in content)
+        assert tool_index < result_index < answer_index
+        assert "是否继续?" in contents[result_index]
+        assert "继续" in contents[result_index]
 
     def test_reasoning_before_answer(self) -> None:
         card = build_complete_card(
