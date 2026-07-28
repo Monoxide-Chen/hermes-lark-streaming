@@ -248,9 +248,43 @@ class StreamCardController(StreamingController):
 
         session.state = SessionState.ABORTED
         session.flush.mark_completed()
+        self._cancel_pending_clarify(session, reason="aborted")
         _logger.info("on_aborted: msg=%s state=ABORTED", message_id[:12])
 
         self._complete_session(session)
+
+    def _cancel_pending_clarify(self, session: CardSession, *, reason: str) -> int:
+        """Unblock Hermes when a card session ends while clarify is waiting."""
+        state = session.clarify_state
+        if state is None:
+            return 0
+
+        cancelled = 0
+        try:
+            clarify_gateway = importlib.import_module("tools.clarify_gateway")
+            cancelled = int(clarify_gateway.clear_session(state.session_key) or 0)
+        except Exception:
+            _logger.warning(
+                "failed to cancel pending clarify: msg=%s clarify=%s reason=%s",
+                session.message_id[:12],
+                state.clarify_id,
+                reason,
+                exc_info=True,
+            )
+
+        with self._clarify_lock:
+            if self._clarify_sessions.get(state.clarify_id) is session:
+                self._clarify_sessions.pop(state.clarify_id, None)
+        if session.clarify_state is state:
+            session.clarify_state = None
+        _logger.info(
+            "pending clarify cancelled: msg=%s clarify=%s reason=%s count=%d",
+            session.message_id[:12],
+            state.clarify_id,
+            reason,
+            cancelled,
+        )
+        return cancelled
 
     async def on_clarify_request(
         self,

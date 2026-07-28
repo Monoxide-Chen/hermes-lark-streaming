@@ -57,6 +57,9 @@ def test_build_clarify_controls_support_choice_and_free_text() -> None:
     assert elements[1]["behaviors"][0]["value"]["hermes_lark_clarify_id"] == "abc123"
     assert elements[2]["elements"][0]["required"] is True
     assert elements[2]["elements"][1]["form_action_type"] == "submit"
+    assert elements[2]["elements"][1]["behaviors"][0]["value"] == {
+        "hermes_lark_clarify_id": "abc123"
+    }
     assert all(len(element["element_id"]) <= 20 for element in elements)
 
 
@@ -68,10 +71,10 @@ def test_parse_choice_and_form_submissions() -> None:
     form = parse_clarify_submission(
         SimpleNamespace(
             tag="button",
-            name="submit_abc123",
+            name="",
             form_value={"input_abc123": "  自定义答案  "},
         ),
-        {},
+        {"hermes_lark_clarify_id": "abc123"},
     )
 
     assert choice is not None
@@ -80,6 +83,21 @@ def test_parse_choice_and_form_submissions() -> None:
     assert form is not None
     assert form.clarify_id == "abc123"
     assert form.text == "自定义答案"
+
+
+def test_legacy_form_submission_without_callback_value_still_parses() -> None:
+    submission = parse_clarify_submission(
+        SimpleNamespace(
+            tag="button",
+            name="submit_abc123",
+            form_value={"input_abc123": "旧卡片回答"},
+        ),
+        {},
+    )
+
+    assert submission is not None
+    assert submission.clarify_id == "abc123"
+    assert submission.text == "旧卡片回答"
 
 
 def test_resolved_actions_remove_controls_and_record_actor() -> None:
@@ -233,3 +251,36 @@ async def test_unauthorized_group_operator_is_recorded_but_not_accepted() -> Non
     assert session.clarify_state is not None
     assert session.clarify_state.resolving is False
     adapter._submit_on_loop.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_pending_clarify_before_completing_card() -> None:
+    ctrl = _setup_controller()
+    session = _active_session()
+    ctrl._sessions[session.message_id] = session
+    assert await ctrl.on_clarify_request(
+        chat_id="oc_chat",
+        question="继续吗?",
+        choices=["继续", "停止"],
+        clarify_id="abc123",
+        session_key="feishu:session",
+    )
+
+    cancelled: list[str] = []
+    tools_module = ModuleType("tools")
+    clarify_module = ModuleType("tools.clarify_gateway")
+    clarify_module.clear_session = lambda key: cancelled.append(key) or 1  # type: ignore[attr-defined]
+    tools_module.clarify_gateway = clarify_module  # type: ignore[attr-defined]
+    ctrl._complete_session = MagicMock()  # type: ignore[method-assign]
+
+    with patch.dict(
+        sys.modules,
+        {"tools": tools_module, "tools.clarify_gateway": clarify_module},
+    ):
+        ctrl.on_aborted(message_id=session.message_id)
+
+    assert cancelled == ["feishu:session"]
+    assert session.state == SessionState.ABORTED
+    assert session.clarify_state is None
+    assert "abc123" not in ctrl._clarify_sessions
+    ctrl._complete_session.assert_called_once_with(session)
