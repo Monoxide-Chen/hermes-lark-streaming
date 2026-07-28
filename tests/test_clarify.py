@@ -17,6 +17,7 @@ from hermes_lark_streaming.clarify import (
 )
 from hermes_lark_streaming.controller import StreamCardController
 from hermes_lark_streaming.feishu import FeishuClient
+from hermes_lark_streaming.patch import on_feishu_stop_action
 from hermes_lark_streaming.streaming.session import CardSession, SessionState
 
 
@@ -258,6 +259,7 @@ async def test_stop_cancels_pending_clarify_before_completing_card() -> None:
     ctrl = _setup_controller()
     session = _active_session()
     ctrl._sessions[session.message_id] = session
+    session.tool_use.record_start("clarify", "等待停止测试")
     assert await ctrl.on_clarify_request(
         chat_id="oc_chat",
         question="继续吗?",
@@ -283,4 +285,64 @@ async def test_stop_cancels_pending_clarify_before_completing_card() -> None:
     assert session.state == SessionState.ABORTED
     assert session.clarify_state is None
     assert "abc123" not in ctrl._clarify_sessions
+    assert session.tool_use.build_display_steps()[0]["status"] == "cancelled"
     ctrl._complete_session.assert_called_once_with(session)
+
+
+@pytest.mark.asyncio
+async def test_stop_action_interrupts_runner_before_aborting_card() -> None:
+    ctrl = MagicMock()
+    ctrl.enabled = True
+    adapter = SimpleNamespace(
+        _allow_group_message=MagicMock(return_value=True),
+        _message_handler=AsyncMock(return_value="stopped"),
+    )
+    event = SimpleNamespace(
+        operator=SimpleNamespace(open_id="ou_owner", user_id="u_owner"),
+        context=SimpleNamespace(open_chat_id="oc_chat"),
+    )
+    synthetic_event = SimpleNamespace(text="/stop")
+
+    with patch("hermes_lark_streaming.patch.get_controller", return_value=ctrl):
+        claimed = await on_feishu_stop_action(
+            adapter=adapter,
+            event=event,
+            synthetic_event=synthetic_event,
+            action_value={
+                "hermes_command": "stop",
+                "hermes_message_id": "om_active",
+            },
+        )
+
+    assert claimed is True
+    adapter._message_handler.assert_awaited_once_with(synthetic_event)
+    ctrl.on_aborted.assert_called_once_with(message_id="om_active")
+
+
+@pytest.mark.asyncio
+async def test_stop_action_rejects_unauthorized_operator() -> None:
+    ctrl = MagicMock()
+    ctrl.enabled = True
+    adapter = SimpleNamespace(
+        _allow_group_message=MagicMock(return_value=False),
+        _message_handler=AsyncMock(),
+    )
+    event = SimpleNamespace(
+        operator=SimpleNamespace(open_id="ou_blocked", user_id="u_blocked"),
+        context=SimpleNamespace(open_chat_id="oc_chat"),
+    )
+
+    with patch("hermes_lark_streaming.patch.get_controller", return_value=ctrl):
+        claimed = await on_feishu_stop_action(
+            adapter=adapter,
+            event=event,
+            synthetic_event=SimpleNamespace(text="/stop"),
+            action_value={
+                "hermes_command": "stop",
+                "hermes_message_id": "om_active",
+            },
+        )
+
+    assert claimed is True
+    adapter._message_handler.assert_not_awaited()
+    ctrl.on_aborted.assert_not_called()

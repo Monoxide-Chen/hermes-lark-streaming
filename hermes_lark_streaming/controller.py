@@ -248,8 +248,13 @@ class StreamCardController(StreamingController):
 
         session.state = SessionState.ABORTED
         session.flush.mark_completed()
+        cancelled_tools = session.tool_use.cancel_running()
         self._cancel_pending_clarify(session, reason="aborted")
-        _logger.info("on_aborted: msg=%s state=ABORTED", message_id[:12])
+        _logger.info(
+            "on_aborted: msg=%s state=ABORTED cancelled_tools=%d",
+            message_id[:12],
+            cancelled_tools,
+        )
 
         self._complete_session(session)
 

@@ -20,9 +20,11 @@ from hermes_lark_streaming.patcher import (
     MARKERS,
     MK_CRON_DELIVER,
     MK_CRON_DELIVER_END,
+    MK_FEISHU_CHAT_TYPE,
     MK_FEISHU_CLARIFY_ACTION,
     MK_FEISHU_CLARIFY_METHOD,
     MK_FEISHU_NOTICE,
+    MK_FEISHU_STOP_ACTION,
     MK_SLASH_DELIVER,
     MK_SLASH_DIRECT,
     BasePatcher,
@@ -170,6 +172,21 @@ def feishu_adapter_copy(tmp_path: Path) -> Path:
                     action_value = action.value or {}
                     self._handle_card_action_event(data)
                     return P2CardActionTriggerResponse()
+
+                async def _handle_card_action_event(self, data):
+                    event = data.event
+                    action_value = event.action.value or {}
+                    synthetic_event = object()
+                    await self._handle_message_with_guards(synthetic_event)
+
+                @staticmethod
+                def _resolve_source_chat_type(*, chat_info, event_chat_type):
+                    resolved = str(chat_info.get("type") or "").strip().lower()
+                    if resolved in {"group", "forum"}:
+                        return resolved
+                    if event_chat_type == "p2p":
+                        return "dm"
+                    return "group"
             '''
         ),
         encoding="utf-8",
@@ -624,9 +641,13 @@ class TestFeishuAdapterPatcher:
         assert MK_FEISHU_NOTICE in content
         assert MK_FEISHU_CLARIFY_METHOD in content
         assert MK_FEISHU_CLARIFY_ACTION in content
+        assert MK_FEISHU_STOP_ACTION in content
+        assert MK_FEISHU_CHAT_TYPE in content
         assert "on_feishu_notification_deliver" in content
         assert "on_feishu_clarify_request" in content
         assert "on_feishu_clarify_action" in content
+        assert "on_feishu_stop_action" in content
+        assert "if resolved == 'dm':" in content
         assert "_lark_notice_msg_id" in content
         ast.parse(content)
 
