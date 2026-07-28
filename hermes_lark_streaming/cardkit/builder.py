@@ -233,6 +233,7 @@ def _tool_status_info(status: str) -> dict[str, str]:
         "running": {"label": "Running", "color": "turquoise"},
         "success": {"label": "Succeeded", "color": "green"},
         "error": {"label": "Failed", "color": "red"},
+        "cancelled": {"label": "Stopped", "color": "grey"},
     }.get(status, {"label": status.capitalize(), "color": "grey"})
 
 
@@ -408,8 +409,25 @@ def build_streaming_tool_use_pending_panel() -> dict[str, Any]:
     )
 
 
+def _stop_generation_button(message_id: str | None = None) -> dict[str, Any]:
+    """Build the inline Hermes stop control for an active streaming card."""
+    callback_value = {"hermes_command": "stop"}
+    if message_id:
+        callback_value["hermes_message_id"] = message_id
+    return {
+        "tag": "button",
+        "element_id": "hermes_stop",
+        "text": {"tag": "plain_text", "content": "停止生成"},
+        "type": "danger",
+        "size": "small",
+        "width": "default",
+        "behaviors": [{"type": "callback", "value": callback_value}],
+    }
+
+
 def build_streaming_card_v2(
     *,
+    message_id: str | None = None,
     tool_steps: list[ToolDisplayStep] | None = None,
     elapsed_ms: float = 0,
     show_tool_use: bool = True,
@@ -435,6 +453,7 @@ def build_streaming_card_v2(
     if show_streaming_element:
         elements.append(_streaming_element(text_size=text_size))
     elements.append(_loading_element())
+    elements.append(_stop_generation_button(message_id))
 
     card = {
         "schema": "2.0",

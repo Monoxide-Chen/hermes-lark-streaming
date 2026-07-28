@@ -209,6 +209,10 @@ MK_FEISHU_CLARIFY_METHOD = f"# {PREFIX}_FEISHU_CLARIFY_METHOD_BEGIN"
 MK_FEISHU_CLARIFY_METHOD_END = f"# {PREFIX}_FEISHU_CLARIFY_METHOD_END"
 MK_FEISHU_CLARIFY_ACTION = f"# {PREFIX}_FEISHU_CLARIFY_ACTION_BEGIN"
 MK_FEISHU_CLARIFY_ACTION_END = f"# {PREFIX}_FEISHU_CLARIFY_ACTION_END"
+MK_FEISHU_STOP_ACTION = f"# {PREFIX}_FEISHU_STOP_ACTION_BEGIN"
+MK_FEISHU_STOP_ACTION_END = f"# {PREFIX}_FEISHU_STOP_ACTION_END"
+MK_FEISHU_CHAT_TYPE = f"# {PREFIX}_FEISHU_CHAT_TYPE_BEGIN"
+MK_FEISHU_CHAT_TYPE_END = f"# {PREFIX}_FEISHU_CHAT_TYPE_END"
 _MAX_SLASH_BYPASS_HOOKS = 8
 
 
@@ -762,6 +766,41 @@ def _feishu_clarify_action_hook(indent: str) -> str:
             "        return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None",
             "except Exception:",
             "    pass",
+        ],
+    )
+
+
+def _feishu_stop_action_hook(indent: str) -> str:
+    """Route community-card stop callbacks directly to the active runner."""
+    return _make_hook(
+        indent,
+        MK_FEISHU_STOP_ACTION,
+        MK_FEISHU_STOP_ACTION_END,
+        [
+            "try:",
+            "    from hermes_lark_streaming.patch import on_feishu_stop_action",
+            "    if await on_feishu_stop_action(",
+            "        adapter=self,",
+            "        event=event,",
+            "        synthetic_event=synthetic_event,",
+            "        action_value=action_value,",
+            "    ):",
+            "        return",
+            "except Exception:",
+            "    logger.warning('[Feishu] Failed to stop community card', exc_info=True)",
+        ],
+    )
+
+
+def _feishu_chat_type_hook(indent: str) -> str:
+    """Preserve resolved DM identity for synthetic card callback events."""
+    return _make_hook(
+        indent,
+        MK_FEISHU_CHAT_TYPE,
+        MK_FEISHU_CHAT_TYPE_END,
+        [
+            "if resolved == 'dm':",
+            "    return 'dm'",
         ],
     )
 
@@ -1391,6 +1430,8 @@ class FeishuAdapterPatcher:
             (MK_FEISHU_NOTICE, MK_FEISHU_NOTICE_END),
             (MK_FEISHU_CLARIFY_METHOD, MK_FEISHU_CLARIFY_METHOD_END),
             (MK_FEISHU_CLARIFY_ACTION, MK_FEISHU_CLARIFY_ACTION_END),
+            (MK_FEISHU_STOP_ACTION, MK_FEISHU_STOP_ACTION_END),
+            (MK_FEISHU_CHAT_TYPE, MK_FEISHU_CHAT_TYPE_END),
         ]
 
     def is_patched(self) -> bool:
@@ -1407,6 +1448,8 @@ class FeishuAdapterPatcher:
         found_send = False
         found_method_anchor = False
         found_action_anchor = False
+        found_stop_anchor = False
+        found_chat_type_anchor = False
         for node in ast.walk(tree):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
                 args = {arg.arg for arg in node.args.args}
@@ -1424,6 +1467,23 @@ class FeishuAdapterPatcher:
                     ):
                         found_action_anchor = True
                         break
+            elif isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_card_action_event":
+                found_stop_anchor = any(
+                    isinstance(stmt, ast.Await)
+                    and isinstance(stmt.value, ast.Call)
+                    and isinstance(stmt.value.func, ast.Attribute)
+                    and stmt.value.func.attr == "_handle_message_with_guards"
+                    for stmt in ast.walk(node)
+                )
+            elif isinstance(node, ast.FunctionDef) and node.name == "_resolve_source_chat_type":
+                found_chat_type_anchor = any(
+                    isinstance(stmt, ast.Assign)
+                    and any(
+                        isinstance(target, ast.Name) and target.id == "resolved"
+                        for target in stmt.targets
+                    )
+                    for stmt in ast.walk(node)
+                )
         missing = []
         if not found_send:
             missing.append("FeishuAdapter.send")
@@ -1431,6 +1491,10 @@ class FeishuAdapterPatcher:
             missing.append("FeishuAdapter.send_exec_approval")
         if not found_action_anchor:
             missing.append("FeishuAdapter._on_card_action_trigger action_value")
+        if not found_stop_anchor:
+            missing.append("FeishuAdapter._handle_card_action_event stop dispatch")
+        if not found_chat_type_anchor:
+            missing.append("FeishuAdapter._resolve_source_chat_type resolved")
         if missing:
             raise PatcherError(
                 "Cannot find Feishu adapter target(s): "
@@ -1453,6 +1517,8 @@ class FeishuAdapterPatcher:
         notice_site = None
         method_site = None
         action_site = None
+        stop_site = None
+        chat_type_site = None
         for node in ast.walk(tree):
             if isinstance(node, ast.AsyncFunctionDef) and node.name == "send":
                 args = {arg.arg for arg in node.args.args}
@@ -1478,12 +1544,42 @@ class FeishuAdapterPatcher:
                     ):
                         action_site = stmt.end_lineno or stmt.lineno
                         break
-        if notice_site is None or method_site is None or action_site is None:
+            elif isinstance(node, ast.AsyncFunctionDef) and node.name == "_handle_card_action_event":
+                for stmt in ast.walk(node):
+                    if (
+                        isinstance(stmt, ast.Expr)
+                        and isinstance(stmt.value, ast.Await)
+                        and isinstance(stmt.value.value, ast.Call)
+                        and isinstance(stmt.value.value.func, ast.Attribute)
+                        and stmt.value.value.func.attr == "_handle_message_with_guards"
+                    ):
+                        stop_site = stmt.lineno - 1
+                        break
+            elif isinstance(node, ast.FunctionDef) and node.name == "_resolve_source_chat_type":
+                for stmt in ast.walk(node):
+                    if (
+                        isinstance(stmt, ast.Assign)
+                        and any(
+                            isinstance(target, ast.Name) and target.id == "resolved"
+                            for target in stmt.targets
+                        )
+                    ):
+                        chat_type_site = stmt.end_lineno or stmt.lineno
+                        break
+        if (
+            notice_site is None
+            or method_site is None
+            or action_site is None
+            or stop_site is None
+            or chat_type_site is None
+        ):
             raise PatcherError("Cannot locate all Feishu adapter injection sites")
         sites = [
             (notice_site, _feishu_notice_hook(_safe_indent(lines, notice_site))),
             (method_site, _feishu_clarify_method_hook(_safe_indent(lines, method_site))),
             (action_site, _feishu_clarify_action_hook(_safe_indent(lines, action_site - 1))),
+            (stop_site, _feishu_stop_action_hook(_safe_indent(lines, stop_site))),
+            (chat_type_site, _feishu_chat_type_hook(_safe_indent(lines, chat_type_site - 1))),
         ]
         for site, hook in sorted(sites, key=lambda item: item[0], reverse=True):
             lines[site:site] = hook.splitlines(keepends=True)
