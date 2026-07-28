@@ -12,6 +12,7 @@ import re
 from collections.abc import Callable
 from functools import wraps
 from inspect import iscoroutinefunction
+from types import SimpleNamespace
 from typing import Any
 
 from .controller import get_controller
@@ -258,6 +259,61 @@ def on_feishu_clarify_action(
     except Exception as exc:
         _logger.warning("on_feishu_clarify_action error: %s", exc, exc_info=True)
         return False
+
+
+async def on_feishu_stop_action(
+    *,
+    adapter: Any,
+    event: Any,
+    synthetic_event: Any,
+    action_value: Any,
+) -> bool:
+    """Stop the active Hermes turn before finalizing its community card."""
+    command = (
+        str(action_value.get("hermes_command", "")).strip().lower()
+        if isinstance(action_value, dict)
+        else ""
+    )
+    if command != "stop":
+        return False
+
+    ctrl = get_controller()
+    if not ctrl.enabled:
+        return False
+
+    operator = getattr(event, "operator", None)
+    open_id = str(getattr(operator, "open_id", "") or "")
+    user_id = str(getattr(operator, "user_id", "") or "")
+    context = getattr(event, "context", None)
+    chat_id = str(getattr(context, "open_chat_id", "") or "")
+    sender_id = SimpleNamespace(open_id=open_id, user_id=user_id, union_id=None)
+
+    allow_group_message = getattr(adapter, "_allow_group_message", None)
+    if callable(allow_group_message) and not allow_group_message(
+        sender_id,
+        chat_id,
+        is_bot=False,
+    ):
+        _logger.warning(
+            "unauthorized stop card action ignored: open_id=%s user_id=%s",
+            open_id or "<unknown>",
+            user_id or "<unknown>",
+        )
+        return True
+
+    handler = getattr(adapter, "_message_handler", None)
+    if not callable(handler):
+        return False
+
+    await handler(synthetic_event)
+    message_id = (
+        str(action_value.get("hermes_message_id", "")).strip()
+        if isinstance(action_value, dict)
+        else ""
+    )
+    if message_id:
+        ctrl.on_aborted(message_id=message_id)
+    return True
 
 
 @_safe_hook()
