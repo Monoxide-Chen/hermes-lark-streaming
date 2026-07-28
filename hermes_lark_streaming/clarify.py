@@ -131,6 +131,12 @@ def build_clarify_add_action(state: ClarifyState) -> dict[str, Any]:
                     "type": "primary_filled",
                     "width": "fill",
                     "form_action_type": "submit",
+                    "behaviors": [
+                        {
+                            "type": "callback",
+                            "value": {_CLARIFY_ACTION_KEY: state.clarify_id},
+                        }
+                    ],
                 },
             ],
         }
@@ -191,13 +197,19 @@ def parse_clarify_submission(action: Any, action_value: Any) -> ClarifySubmissio
             return ClarifySubmission(clarify_id=clarify_id)
         return ClarifySubmission(clarify_id=clarify_id, choice_index=choice_index)
 
-    name = str(getattr(action, "name", "") or "")
-    if tag != "button" or not name.startswith("submit_"):
+    if tag != "button":
         return None
 
-    suffix = name.removeprefix("submit_")
+    name = str(getattr(action, "name", "") or "")
+    if clarify_id:
+        suffix = _safe_id(clarify_id)
+    elif name.startswith("submit_"):
+        suffix = name.removeprefix("submit_")
+        clarify_id = suffix
+    else:
+        return None
     form_value = getattr(action, "form_value", None)
     if not isinstance(form_value, dict):
         return None
     text = str(form_value.get(f"input_{suffix}") or "").strip()
-    return ClarifySubmission(clarify_id=suffix, text=text)
+    return ClarifySubmission(clarify_id=clarify_id, text=text)
