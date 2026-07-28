@@ -303,6 +303,18 @@ class TestToolUseTracker:
         assert steps[0]["status"] == "success"
         assert steps[1]["status"] == "error"
 
+    def test_cancel_running_marks_only_in_flight_steps_stopped(self) -> None:
+        tracker = ToolUseTracker()
+        tracker.record_start("read", "done.py")
+        tracker.record_end("read", output="ok")
+        tracker.record_start("clarify", "waiting")
+
+        assert tracker.cancel_running() == 1
+        steps = tracker.build_display_steps()
+        assert steps[0]["status"] == "success"
+        assert steps[1]["status"] == "cancelled"
+        assert steps[1]["elapsed_ms"] >= 0
+
     def test_max_steps_limit(self) -> None:
         tracker = ToolUseTracker(max_steps=2)
         tracker.record_start("a", "")

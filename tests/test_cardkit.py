@@ -385,6 +385,20 @@ class TestBuildStreamingCardV2:
         assert card["config"]["streaming_mode"] is True
         assert card["body"]["elements"]
 
+    def test_stop_button_targets_the_active_message(self) -> None:
+        card = build_streaming_card_v2(message_id="om_active")
+        stop = next(
+            element
+            for element in card["body"]["elements"]
+            if element.get("element_id") == "hermes_stop"
+        )
+
+        assert stop["text"]["content"] == "停止生成"
+        assert stop["behaviors"][0]["value"] == {
+            "hermes_command": "stop",
+            "hermes_message_id": "om_active",
+        }
+
     def test_with_tool_steps(self) -> None:
         card = build_streaming_card_v2(tool_steps=[_STEP_RUNNING], elapsed_ms=100)
         assert any(e.get("element_id") == TOOL_PANEL_ELEMENT_ID for e in card["body"]["elements"])

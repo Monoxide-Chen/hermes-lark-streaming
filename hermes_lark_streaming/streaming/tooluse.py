@@ -15,6 +15,7 @@ class ToolStatus(StrEnum):
     RUNNING = "running"
     SUCCESS = "success"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 class ToolBlock(TypedDict):
@@ -296,6 +297,20 @@ class ToolUseTracker:
                 result_block=_build_display_block(output, "json", sanitizer=sanitizer) if output else None,
             )
         )
+
+    def cancel_running(self) -> int:
+        """Mark every in-flight tool as stopped when the card is aborted."""
+        if self._session is None:
+            return 0
+        cancelled = 0
+        now = time.time()
+        for step in self._session.steps:
+            if step.status != ToolStatus.RUNNING:
+                continue
+            step.status = ToolStatus.CANCELLED
+            step.elapsed_ms = (now - step.started_at) * 1000
+            cancelled += 1
+        return cancelled
 
     def build_display_steps(self) -> list[ToolDisplayStep]:
         """构建用于卡片渲染的步骤列表."""

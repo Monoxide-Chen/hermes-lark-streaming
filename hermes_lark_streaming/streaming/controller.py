@@ -122,6 +122,7 @@ class StreamingController:
             assert self._client is not None
 
             card = build_streaming_card_v2(
+                message_id=session.message_id,
                 show_tool_use=False,
                 show_reasoning=False,
                 show_streaming_element=False,
@@ -529,6 +530,7 @@ class StreamingController:
 
         try:
             card = build_streaming_card_v2(
+                message_id=session.message_id,
                 show_tool_use=False,
                 show_reasoning=False,
                 show_streaming_element=False,
