@@ -48,6 +48,10 @@ class ClarifyState:
         return f"cf{self.suffix}"
 
     @property
+    def input_element_id(self) -> str:
+        return f"ci{self.suffix}"
+
+    @property
     def input_name(self) -> str:
         return f"input_{self.suffix}"
 
@@ -113,14 +117,14 @@ def build_clarify_add_action(state: ClarifyState) -> dict[str, Any]:
             "elements": [
                 {
                     "tag": "input",
+                    "element_id": state.input_element_id,
                     "name": state.input_name,
                     "required": True,
                     "label": {"tag": "plain_text", "content": input_label},
                     "placeholder": {"tag": "plain_text", "content": "请输入"},
                     "input_type": "multiline_text",
                     "rows": 2,
-                    "auto_resize": True,
-                    "max_rows": 6,
+                    "auto_resize": False,
                     "max_length": 1000,
                     "width": "fill",
                 },
