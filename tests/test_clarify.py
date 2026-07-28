@@ -56,7 +56,10 @@ def test_build_clarify_controls_support_choice_and_free_text() -> None:
     assert action["params"]["target_element_id"] == "loading_icon"
     assert [element["tag"] for element in elements] == ["markdown", "select_static", "form"]
     assert elements[1]["behaviors"][0]["value"]["hermes_lark_clarify_id"] == "abc123"
+    assert elements[2]["elements"][0]["element_id"] == "ciabc123"
     assert elements[2]["elements"][0]["required"] is True
+    assert elements[2]["elements"][0]["auto_resize"] is False
+    assert "max_rows" not in elements[2]["elements"][0]
     assert elements[2]["elements"][1]["form_action_type"] == "submit"
     assert elements[2]["elements"][1]["behaviors"][0]["value"] == {
         "hermes_lark_clarify_id": "abc123"
