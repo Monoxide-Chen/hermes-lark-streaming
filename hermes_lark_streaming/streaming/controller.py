@@ -526,6 +526,7 @@ class StreamingController:
             panel_expanded=self._cfg.panel_expanded,
             header_enabled=False,
             body_text_size=self._cfg.body_text_size,
+            collapse_all_activity=True,
         )
 
         try:

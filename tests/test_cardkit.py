@@ -478,13 +478,14 @@ class TestBuildSegmentCompleteCard:
             ],
         )
 
-        contents = [str(element) for element in card["body"]["elements"]]
-        tool_index = next(i for i, content in enumerate(contents) if "collapsible_panel" in content)
-        result_index = next(i for i, content in enumerate(contents) if "Alice" in content)
-        answer_index = next(i for i, content in enumerate(contents) if "继续执行" in content)
-        assert tool_index < result_index < answer_index
-        assert "是否继续?" in contents[result_index]
-        assert "继续" in contents[result_index]
+        elements = card["body"]["elements"]
+        activity = elements[0]
+        assert activity["tag"] == "collapsible_panel"
+        assert "Alice" in str(activity)
+        assert "是否继续?" in str(activity)
+        assert "继续" in str(activity)
+        assert "继续执行" not in str(activity)
+        assert "继续执行" in str(elements[1])
 
     def test_reasoning_before_answer(self) -> None:
         card = build_complete_card(
@@ -517,12 +518,67 @@ class TestBuildSegmentCompleteCard:
             ],
             all_tool_steps=[_STEP_SUCCESS, _STEP_RUNNING],
         )
-        contents = [str(e) for e in card["body"]["elements"]]
-        r1 = next(i for i, c in enumerate(contents) if "r1" in c)
-        a1 = next(i for i, c in enumerate(contents) if "a1" in c)
-        r2 = next(i for i, c in enumerate(contents) if "r2" in c)
-        a2 = next(i for i, c in enumerate(contents) if "a2" in c)
-        assert r1 < a1 < r2 < a2
+        elements = card["body"]["elements"]
+        activity = elements[0]
+        assert activity["tag"] == "collapsible_panel"
+        assert activity["expanded"] is False
+        assert "Activity" in str(activity["header"])
+        assert "过程" in str(activity["header"])
+        assert "r1" in str(activity)
+        assert "a1" in str(activity)
+        assert "r2" in str(activity)
+        assert "a2" not in str(activity)
+        assert "a2" in str(elements[1])
+
+    def test_activity_panel_flattens_nested_reasoning_and_tool_panels(self) -> None:
+        card = build_complete_card(
+            segments=[
+                _seg("reasoning", "thinking"),
+                _seg("tool", tool_offset=0, tool_end_offset=1),
+                _seg("answer", "final"),
+            ],
+            all_tool_steps=[_STEP_SUCCESS],
+            footer_data={"duration": 12.3},
+        )
+        activity = card["body"]["elements"][0]
+        assert activity["tag"] == "collapsible_panel"
+        assert activity["header"]["title"]["content"] == "Activity · 12.3s"
+        assert "thinking" in str(activity)
+        assert _STEP_SUCCESS["title"] in str(activity)
+        assert not any(
+            element.get("tag") == "collapsible_panel"
+            for element in activity["elements"]
+        )
+        assert card["body"]["elements"][1]["content"] == "final"
+
+    def test_activity_panel_respects_panel_expanded_setting(self) -> None:
+        card = build_complete_card(
+            segments=[_seg("answer", "intermediate"), _seg("answer", "final")],
+            all_tool_steps=[],
+            panel_expanded=True,
+        )
+        assert card["body"]["elements"][0]["expanded"] is True
+
+    def test_single_final_answer_does_not_add_empty_activity_panel(self) -> None:
+        card = build_complete_card(
+            segments=[_seg("answer", "final")],
+            all_tool_steps=[],
+        )
+        assert card["body"]["elements"][0]["tag"] == "markdown"
+        assert card["body"]["elements"][0]["content"] == "final"
+
+    def test_split_card_can_collapse_every_segment_as_activity(self) -> None:
+        card = build_complete_card(
+            segments=[_seg("answer", "intermediate"), _seg("answer", "last on page")],
+            all_tool_steps=[],
+            collapse_all_activity=True,
+            footer_enabled=False,
+        )
+        elements = card["body"]["elements"]
+        assert len(elements) == 1
+        assert elements[0]["tag"] == "collapsible_panel"
+        assert "intermediate" in str(elements[0])
+        assert "last on page" in str(elements[0])
 
     def test_tool_end_offset_zero_uses_all_steps(self) -> None:
         steps = [_STEP_SUCCESS, _STEP_RUNNING]
