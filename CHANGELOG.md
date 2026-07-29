@@ -9,26 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-29
+
 ### 新增
 
+- 普通飞书卡片默认不再引用用户原消息，避免每条回复都显示引用块。
 - 飞书斜杠命令的即时结果统一为 CardKit 完成态卡片；skill/bundle 等进入 agent loop 的命令继续使用真实流式卡片。
 - gateway 生命周期通知与 self-improvement/background review 通知使用 CardKit 完成态卡片，失败时回退 Hermes 原始文本发送。
 - Hermes `clarify` / ask-user 请求直接附加到当前流式卡片，支持选项和自由输入；提交后原地收起控件，并记录群聊回答者的姓名与用户 ID。
+- 新增仅 owner 可见的 GitHub Release 更新提示；后台缓存版本信息，并仅在卡片成功送达后记录已提示版本。
+- 完成态卡片可折叠本轮中间过程，同时保留内部工具结果的嵌套折叠面板。
 
 ### 修复
 
+- 保留模型原始 Markdown，并修复相邻加粗标记在飞书卡片中未正确渲染的问题。
+- 修复 `clarify` 自由输入无法发送、输入框失焦以及停止后工具仍继续等待的问题。
+- 修复折叠本轮中间过程后工具结果无法继续单独折叠的问题。
 - `/new`、`/reset` 等 `EphemeralReply` 命令改用卡片后仍保留 TTL 自动删除语义。
 - 补齐 agent 运行期间的 command bypass 路径，避免 `/stop`、`/status` 等绕过 CardKit。
 - 旧版仅安装普通 slash hook 时，重新运行 `install` 会自动升级为完整的 normal/direct/bypass hooks。
 
 ### Added
 
+- Normal Feishu card replies no longer quote the user's source message by default.
 - Immediate Feishu slash-command results now use completed CardKit cards, while skill/bundle commands that enter the agent loop keep real streaming cards.
 - Gateway lifecycle and deferred self-improvement/background-review notices now use completed CardKit cards, with fallback to Hermes text delivery.
 - Hermes `clarify` / ask-user prompts now attach to the active streaming card with choice and free-text controls, collapse in place after submission, and audit the responding group member.
+- Add owner-only GitHub Release notices with background caching and delivery-confirmed one-shot state.
+- Completed cards can collapse intermediate turn activity while preserving nested, independently collapsible tool-result panels.
 
 ### Fixed
 
+- Preserve model-authored Markdown and render adjacent bold spans correctly in Feishu cards.
+- Fix `clarify` free-text submission, input focus, and stop cancellation leaving the tool waiting.
+- Keep tool results independently collapsible after completed turn activity is collapsed.
 - Preserve `EphemeralReply` TTL deletion for `/new`, `/reset`, and similar commands after card delivery.
 - Cover active-agent command bypass paths such as `/stop` and `/status`.
 - Re-running `install` upgrades legacy normal-only slash hooks to the complete normal/direct/bypass set.
