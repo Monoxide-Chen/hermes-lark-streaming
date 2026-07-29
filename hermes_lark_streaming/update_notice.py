@@ -195,13 +195,17 @@ class UpdateNoticeManager:
         repo = self._config.update_notice_repo
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
             raise ValueError("invalid update_notice.repo")
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"hermes-lark-streaming/{__version__}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        token = self._config.update_notice_github_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(
             f"https://api.github.com/repos/{repo}/releases/latest",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": f"hermes-lark-streaming/{__version__}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
+            headers=headers,
         )
         try:
             with urllib.request.urlopen(

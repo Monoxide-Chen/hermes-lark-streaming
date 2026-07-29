@@ -92,6 +92,11 @@ begins, the notice is offered on the owner's next model turn.
 `HERMES_LARK_OWNER_USER_ID` and `HERMES_LARK_UPDATE_STATE_PATH` may be used
 instead of storing those two values in YAML.
 
+Release checks use `GITHUB_TOKEN` when available, then `GH_TOKEN`, and fall
+back to GitHub's anonymous API when neither is set. Tokens are read only from
+the process environment and are sent only to the fixed `api.github.com`
+release endpoint; they are never written to plugin state or logs.
+
 ### 凭据
 
 凭据按以下顺序解析：

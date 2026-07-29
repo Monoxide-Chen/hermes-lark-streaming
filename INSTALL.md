@@ -110,6 +110,9 @@ nothing. Relative state paths are resolved under `HERMES_HOME`. The release
 cache is warmed when the gateway module loads and persisted for the next
 restart; a first-ever startup never blocks message handling while GitHub is
 being checked.
+When available, the release check authenticates with `GITHUB_TOKEN`, falling
+back to `GH_TOKEN` and then to GitHub's anonymous API. The token is read from
+the gateway process environment and is not stored by the plugin.
 
 ## Step 5 — Install the hooks
 

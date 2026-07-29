@@ -98,6 +98,15 @@ class Config:
         ).strip()
 
     @property
+    def update_notice_github_token(self) -> str:
+        """Optional GitHub API token, preferring Actions' standard variable."""
+        for name in ("GITHUB_TOKEN", "GH_TOKEN"):
+            value = os.environ.get(name, "").strip()
+            if value:
+                return value
+        return ""
+
+    @property
     def update_notice_check_ttl_sec(self) -> int:
         """Minimum interval between GitHub Release checks."""
         value = int(self._update_notice_sec().get("check_ttl_sec", 86400))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -128,15 +129,66 @@ def test_fetches_latest_release_tag(tmp_path: Path) -> None:
         state_path=tmp_path / "state.json",
     )
 
-    with patch(
-        "hermes_lark_streaming.update_notice.urllib.request.urlopen",
-        return_value=response,
-    ) as urlopen:
+    with (
+        patch.dict(os.environ, {"GITHUB_TOKEN": "", "GH_TOKEN": ""}),
+        patch(
+            "hermes_lark_streaming.update_notice.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen,
+    ):
         assert manager.refresh_now() == "0.12.0"
 
     request = urlopen.call_args.args[0]
     assert request.full_url.endswith("/releases/latest")
+    assert request.get_header("Authorization") is None
     assert urlopen.call_args.kwargs["timeout"] == 5.0
+
+
+def test_release_request_prefers_github_token(tmp_path: Path) -> None:
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = b'{"tag_name":"v0.12.1"}'
+    manager = UpdateNoticeManager(
+        config=_config(),
+        state_path=tmp_path / "state.json",
+    )
+
+    with (
+        patch.dict(
+            os.environ,
+            {"GITHUB_TOKEN": "github-token", "GH_TOKEN": "gh-token"},
+        ),
+        patch(
+            "hermes_lark_streaming.update_notice.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen,
+    ):
+        assert manager.refresh_now() == "0.12.1"
+
+    request = urlopen.call_args.args[0]
+    assert request.get_header("Authorization") == "Bearer github-token"
+
+
+def test_release_request_falls_back_to_gh_token(tmp_path: Path) -> None:
+    response = MagicMock()
+    response.__enter__.return_value = response
+    response.read.return_value = b'{"tag_name":"v0.12.1"}'
+    manager = UpdateNoticeManager(
+        config=_config(),
+        state_path=tmp_path / "state.json",
+    )
+
+    with (
+        patch.dict(os.environ, {"GITHUB_TOKEN": "", "GH_TOKEN": "gh-token"}),
+        patch(
+            "hermes_lark_streaming.update_notice.urllib.request.urlopen",
+            return_value=response,
+        ) as urlopen,
+    ):
+        assert manager.refresh_now() == "0.12.1"
+
+    request = urlopen.call_args.args[0]
+    assert request.get_header("Authorization") == "Bearer gh-token"
 
 
 def test_release_request_failure_keeps_notice_unavailable(tmp_path: Path) -> None:
