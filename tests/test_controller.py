@@ -627,8 +627,15 @@ class TestDoFlush:
 
         assert await ctrl._do_split_card(session, 5, [], set(), {}, []) is True
 
-        contents = [element["content"] for element in sealed_cards[0]["body"]["elements"]]
-        assert contents == ["page content 2", "page content 3", "page content 4"]
+        elements = sealed_cards[0]["body"]["elements"]
+        assert len(elements) == 1
+        assert elements[0]["tag"] == "collapsible_panel"
+        contents = str(elements[0])
+        assert "page content 2" in contents
+        assert "page content 3" in contents
+        assert "page content 4" in contents
+        assert "page content 0" not in contents
+        assert "page content 1" not in contents
         assert session.split_index == 5
 
     @pytest.mark.asyncio

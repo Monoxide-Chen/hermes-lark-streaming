@@ -285,6 +285,59 @@ def _build_reasoning_panel(
     return panel
 
 
+def _flatten_collapsible_panel(panel: dict) -> list[dict]:
+    """Render a panel's title and children without nesting collapsible panels.
+
+    CardKit does not reliably accept a ``collapsible_panel`` inside another
+    ``collapsible_panel``.  Completed-card activity therefore keeps the same
+    content while promoting the inner header to a small markdown heading.
+    """
+    title = panel.get("header", {}).get("title", {})
+    content = str(title.get("content", "")).strip()
+    i18n_content = title.get("i18n_content")
+    elements: list[dict] = []
+    if content:
+        heading: dict[str, Any] = {
+            "tag": "markdown",
+            "content": f"<font color='grey'>**{content}**</font>",
+            "text_size": "notation",
+        }
+        if isinstance(i18n_content, dict):
+            heading["i18n_content"] = {
+                locale: f"<font color='grey'>**{localized}**</font>"
+                for locale, localized in i18n_content.items()
+            }
+        elements.append(heading)
+    elements.extend(panel.get("elements", []))
+    return elements
+
+
+def _build_activity_panel(
+    elements: list[dict],
+    *,
+    duration_sec: float = 0,
+    expanded: bool = False,
+) -> dict:
+    """Build the Codex-style completed-turn history panel."""
+    en_label, zh_label = _T["activity"]
+    if duration_sec > 0:
+        elapsed = _format_elapsed(duration_sec * 1000)
+        en_label = f"{en_label} · {elapsed}"
+        zh_label = f"{zh_label} · {elapsed}"
+    return _collapsible_panel(
+        expanded=expanded,
+        title_el={
+            "tag": "plain_text",
+            "content": en_label,
+            "i18n_content": _i18n(en_label, zh_label),
+            "text_color": "grey",
+            "text_size": "notation",
+        },
+        elements=elements,
+        vertical_spacing="8px",
+    )
+
+
 def _build_footer_elements(
     footer_data: dict | None,
     is_error: bool = False,
@@ -492,9 +545,11 @@ def build_complete_card(
     panel_expanded: bool = False,
     header_enabled: bool = False,
     body_text_size: str = "normal_v2",
+    collapse_all_activity: bool = False,
 ) -> dict[str, Any]:
-    """完成态流式卡片 — 按 segments 顺序渲染."""
+    """完成态卡片：最后回答展开，其余本轮过程整体可折叠."""
     elements: list[dict] = []
+    rendered: list[tuple[dict, bool]] = []
     has_answer = False
     clarify_elements = [
         {
@@ -511,32 +566,71 @@ def build_complete_card(
     ]
     clarifies_rendered = False
     saw_tool = False
+    final_answer = next(
+        (
+            seg
+            for seg in reversed(segments)
+            if seg.type == SegmentType.ANSWER and bool(seg.text)
+        ),
+        None,
+    )
+    group_activity = final_answer is not None or collapse_all_activity
 
     for seg in segments:
         if seg.type == SegmentType.REASONING:
             if seg.text:
-                elements.append(_build_reasoning_panel(
+                panel = _build_reasoning_panel(
                     seg.text, seg.elapsed_ms, expanded=panel_expanded,
                     element_id=None, text_element_id=None,
-                ))
+                )
+                reasoning_elements = (
+                    _flatten_collapsible_panel(panel)
+                    if group_activity
+                    else [panel]
+                )
+                rendered.extend((element, False) for element in reasoning_elements)
         elif seg.type == SegmentType.TOOL:
             start = seg.tool_offset
             end = seg.tool_end_offset if seg.tool_end_offset else len(all_tool_steps)
             steps = all_tool_steps[start:end]
             if steps:
-                elements.append(_build_tool_panel(steps, expanded=panel_expanded, element_id=None))
+                panel = _build_tool_panel(steps, expanded=panel_expanded, element_id=None)
+                tool_elements = (
+                    _flatten_collapsible_panel(panel)
+                    if group_activity
+                    else [panel]
+                )
+                rendered.extend((element, False) for element in tool_elements)
                 saw_tool = True
         elif seg.type == SegmentType.ANSWER and seg.text:
             if clarify_elements and saw_tool and not clarifies_rendered:
-                elements.extend(clarify_elements)
+                rendered.extend((element, False) for element in clarify_elements)
                 clarifies_rendered = True
             has_answer = True
             content = _downgrade_tables(optimize_markdown_style(seg.text))
             for chunk in _split_long_text(content):
-                elements.append({"tag": "markdown", "content": chunk, "text_size": body_text_size})
+                rendered.append((
+                    {"tag": "markdown", "content": chunk, "text_size": body_text_size},
+                    seg is final_answer and not collapse_all_activity,
+                ))
 
     if clarify_elements and not clarifies_rendered:
-        elements.extend(clarify_elements)
+        rendered.extend((element, False) for element in clarify_elements)
+
+    if group_activity:
+        activity_elements = [element for element, is_final in rendered if not is_final]
+        final_elements = [element for element, is_final in rendered if is_final]
+        if activity_elements:
+            duration = (footer_data or {}).get("duration", 0)
+            duration_sec = float(duration) if isinstance(duration, (int, float)) else 0
+            elements.append(_build_activity_panel(
+                activity_elements,
+                duration_sec=duration_sec,
+                expanded=panel_expanded,
+            ))
+        elements.extend(final_elements)
+    else:
+        elements.extend(element for element, _ in rendered)
 
     if not has_answer:
         elements.append({"tag": "markdown", "content": _T["done"][0], "text_size": body_text_size})
