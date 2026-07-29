@@ -285,13 +285,8 @@ def _build_reasoning_panel(
     return panel
 
 
-def _flatten_collapsible_panel(panel: dict) -> list[dict]:
-    """Render a panel's title and children without nesting collapsible panels.
-
-    CardKit does not reliably accept a ``collapsible_panel`` inside another
-    ``collapsible_panel``.  Completed-card activity therefore keeps the same
-    content while promoting the inner header to a small markdown heading.
-    """
+def _flatten_reasoning_panel(panel: dict) -> list[dict]:
+    """Flatten reasoning while tool panels retain their own folding control."""
     title = panel.get("header", {}).get("title", {})
     content = str(title.get("content", "")).strip()
     i18n_content = title.get("i18n_content")
@@ -584,7 +579,7 @@ def build_complete_card(
                     element_id=None, text_element_id=None,
                 )
                 reasoning_elements = (
-                    _flatten_collapsible_panel(panel)
+                    _flatten_reasoning_panel(panel)
                     if group_activity
                     else [panel]
                 )
@@ -595,12 +590,7 @@ def build_complete_card(
             steps = all_tool_steps[start:end]
             if steps:
                 panel = _build_tool_panel(steps, expanded=panel_expanded, element_id=None)
-                tool_elements = (
-                    _flatten_collapsible_panel(panel)
-                    if group_activity
-                    else [panel]
-                )
-                rendered.extend((element, False) for element in tool_elements)
+                rendered.append((panel, False))
                 saw_tool = True
         elif seg.type == SegmentType.ANSWER and seg.text:
             if clarify_elements and saw_tool and not clarifies_rendered:
