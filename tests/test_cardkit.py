@@ -530,7 +530,7 @@ class TestBuildSegmentCompleteCard:
         assert "a2" not in str(activity)
         assert "a2" in str(elements[1])
 
-    def test_activity_panel_flattens_nested_reasoning_and_tool_panels(self) -> None:
+    def test_activity_panel_keeps_tool_panel_independently_collapsible(self) -> None:
         card = build_complete_card(
             segments=[
                 _seg("reasoning", "thinking"),
@@ -545,9 +545,17 @@ class TestBuildSegmentCompleteCard:
         assert activity["header"]["title"]["content"] == "Activity · 12.3s"
         assert "thinking" in str(activity)
         assert _STEP_SUCCESS["title"] in str(activity)
+        nested_panels = [
+            element
+            for element in activity["elements"]
+            if element.get("tag") == "collapsible_panel"
+        ]
+        assert len(nested_panels) == 1
+        assert nested_panels[0]["expanded"] is False
+        assert "Tool use" in str(nested_panels[0]["header"])
         assert not any(
             element.get("tag") == "collapsible_panel"
-            for element in activity["elements"]
+            for element in activity["elements"][:2]
         )
         assert card["body"]["elements"][1]["content"] == "final"
 
