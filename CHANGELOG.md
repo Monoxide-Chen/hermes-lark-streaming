@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-07-29
+
+### 变更
+
+- GitHub Release 更新检查优先使用服务器环境中的 `GITHUB_TOKEN`，其次使用 `GH_TOKEN`；均未配置时继续使用匿名 API。
+
+### Changed
+
+- GitHub Release checks now prefer `GITHUB_TOKEN`, then `GH_TOKEN`, and continue anonymously when neither server environment variable is configured.
+
 ## [0.12.0] - 2026-07-29
 
 ### 新增
